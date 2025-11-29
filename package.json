@@ -1,7 +1,7 @@
 {
-  "name": "chrome-devtools-mcp",
-  "version": "0.10.2",
-  "description": "MCP server for Chrome DevTools",
+  "name": "js-reverse-mcp",
+  "version": "1.0.0",
+  "description": "MCP server for JavaScript reverse engineering and debugging",
   "type": "module",
   "bin": "./build/src/index.js",
   "main": "index.js",
@@ -30,14 +30,14 @@
     "LICENSE",
     "!*.tsbuildinfo"
   ],
-  "repository": "ChromeDevTools/chrome-devtools-mcp",
-  "author": "Google LLC",
+  "repository": "zhizhuodemao/js-reverse-mcp",
+  "author": "zhizhuodemao",
   "license": "Apache-2.0",
   "bugs": {
-    "url": "https://github.com/ChromeDevTools/chrome-devtools-mcp/issues"
+    "url": "https://github.com/zhizhuodemao/js-reverse-mcp/issues"
   },
-  "homepage": "https://github.com/ChromeDevTools/chrome-devtools-mcp#readme",
-  "mcpName": "io.github.ChromeDevTools/chrome-devtools-mcp",
+  "homepage": "https://github.com/zhizhuodemao/js-reverse-mcp#readme",
+  "mcpName": "io.github.zhizhuodemao/js-reverse-mcp",
   "devDependencies": {
     "@eslint/js": "^9.35.0",
     "@modelcontextprotocol/sdk": "1.21.1",

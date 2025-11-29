@@ -23,11 +23,9 @@ import {
 } from './third_party/index.js';
 import {ToolCategory} from './tools/categories.js';
 import * as consoleTools from './tools/console.js';
-import * as emulationTools from './tools/emulation.js';
-import * as inputTools from './tools/input.js';
+import * as debuggerTools from './tools/debugger.js';
 import * as networkTools from './tools/network.js';
 import * as pagesTools from './tools/pages.js';
-import * as performanceTools from './tools/performance.js';
 import * as screenshotTools from './tools/screenshot.js';
 import * as scriptTools from './tools/script.js';
 import * as snapshotTools from './tools/snapshot.js';
@@ -103,18 +101,6 @@ const toolMutex = new Mutex();
 
 function registerTool(tool: ToolDefinition): void {
   if (
-    tool.annotations.category === ToolCategory.EMULATION &&
-    args.categoryEmulation === false
-  ) {
-    return;
-  }
-  if (
-    tool.annotations.category === ToolCategory.PERFORMANCE &&
-    args.categoryPerformance === false
-  ) {
-    return;
-  }
-  if (
     tool.annotations.category === ToolCategory.NETWORK &&
     args.categoryNetwork === false
   ) {
@@ -173,11 +159,9 @@ function registerTool(tool: ToolDefinition): void {
 
 const tools = [
   ...Object.values(consoleTools),
-  ...Object.values(emulationTools),
-  ...Object.values(inputTools),
+  ...Object.values(debuggerTools),
   ...Object.values(networkTools),
   ...Object.values(pagesTools),
-  ...Object.values(performanceTools),
   ...Object.values(screenshotTools),
   ...Object.values(scriptTools),
   ...Object.values(snapshotTools),

@@ -10,8 +10,9 @@ import path from 'node:path';
 
 import {type AggregatedIssue} from '../node_modules/chrome-devtools-frontend/mcp/mcp.js';
 
+import {DebuggerContext} from './DebuggerContext.js';
 import {extractUrlLikeFromDevToolsTitle, urlsEqual} from './DevtoolsUtils.js';
-import type {ListenerMap} from './PageCollector.js';
+import type {ListenerMap, RequestInitiator} from './PageCollector.js';
 import {NetworkCollector, ConsoleCollector} from './PageCollector.js';
 import {Locator} from './third_party/index.js';
 import type {
@@ -105,6 +106,7 @@ export class McpContext implements Context {
   #networkConditionsMap = new WeakMap<Page, string>();
   #cpuThrottlingRateMap = new WeakMap<Page, number>();
   #dialog?: Dialog;
+  #debuggerContext: DebuggerContext = new DebuggerContext();
 
   #nextSnapshotId = 1;
   #traceResults: TraceResult[] = [];
@@ -158,11 +160,43 @@ export class McpContext implements Context {
     await this.createPagesSnapshot();
     await this.#networkCollector.init();
     await this.#consoleCollector.init();
+    await this.#initDebugger();
+  }
+
+  async #initDebugger(): Promise<void> {
+    const page = this.getSelectedPage();
+    if (!page) {
+      return;
+    }
+    try {
+      // @ts-expect-error _client is internal Puppeteer API
+      const client = page._client();
+      await this.#debuggerContext.enable(client);
+    } catch (error) {
+      this.logger('Failed to initialize debugger context', error);
+    }
   }
 
   dispose() {
     this.#networkCollector.dispose();
     this.#consoleCollector.dispose();
+    void this.#debuggerContext.disable();
+  }
+
+  /**
+   * Get the debugger context for script/breakpoint management.
+   */
+  get debuggerContext(): DebuggerContext {
+    return this.#debuggerContext;
+  }
+
+  /**
+   * Reinitialize the debugger for the current page.
+   * Call this after selecting a new page.
+   */
+  async reinitDebugger(): Promise<void> {
+    await this.#debuggerContext.disable();
+    await this.#initDebugger();
   }
 
   static async from(
@@ -339,6 +373,8 @@ export class McpContext implements Context {
     this.#selectedPage = newPage;
     newPage.on('dialog', this.#dialogHandler);
     this.#updateSelectedPageTimeouts();
+    // Reinitialize debugger for the new page
+    void this.reinitDebugger();
   }
 
   #updateSelectedPageTimeouts() {
@@ -620,6 +656,23 @@ export class McpContext implements Context {
 
   getNetworkRequestStableId(request: HTTPRequest): number {
     return this.#networkCollector.getIdForResource(request);
+  }
+
+  /**
+   * Get the initiator (call stack) for a network request.
+   */
+  getRequestInitiator(request: HTTPRequest): RequestInitiator | undefined {
+    const page = this.getSelectedPage();
+    return this.#networkCollector.getInitiator(page, request);
+  }
+
+  /**
+   * Get the initiator by request ID.
+   */
+  getRequestInitiatorById(requestId: number): RequestInitiator | undefined {
+    const page = this.getSelectedPage();
+    const request = this.#networkCollector.getById(page, requestId);
+    return this.#networkCollector.getInitiator(page, request);
   }
 
   waitForTextOnPage({

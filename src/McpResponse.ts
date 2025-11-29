@@ -27,7 +27,6 @@ import type {
   ResourceType,
   TextContent,
 } from './third_party/index.js';
-import {handleDialog} from './tools/pages.js';
 import type {
   DevToolsData,
   ImageContentData,
@@ -373,16 +372,6 @@ export class McpResponse implements Response {
       response.push(`Emulating: ${cpuThrottlingRate}x slowdown`);
     }
 
-    const dialog = context.getDialog();
-    if (dialog) {
-      const defaultValueIfNeeded =
-        dialog.type() === 'prompt'
-          ? ` (default value: "${dialog.defaultValue()}")`
-          : '';
-      response.push(`# Open dialog
-${dialog.type()}: ${dialog.message()}${defaultValueIfNeeded}.
-Call ${handleDialog.name} to handle it before continuing.`);
-    }
 
     if (this.#includePages) {
       const parts = [`## Pages`];

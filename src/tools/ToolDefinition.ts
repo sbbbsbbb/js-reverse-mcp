@@ -4,9 +4,11 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import type {DebuggerContext} from '../DebuggerContext.js';
 import type {TextSnapshotNode} from '../McpContext.js';
+import type {RequestInitiator} from '../PageCollector.js';
 import {zod} from '../third_party/index.js';
-import type {Dialog, ElementHandle, Page} from '../third_party/index.js';
+import type {Dialog, ElementHandle, HTTPRequest, Page} from '../third_party/index.js';
 import type {TraceResult} from '../trace-processing/parse.js';
 import type {PaginationOptions} from '../utils/types.js';
 
@@ -120,6 +122,22 @@ export type Context = Readonly<{
    * Returns a reqid for a cdpRequestId.
    */
   resolveCdpElementId(cdpBackendNodeId: number): string | undefined;
+  /**
+   * Get the debugger context for script/breakpoint management.
+   */
+  debuggerContext: DebuggerContext;
+  /**
+   * Get the initiator (call stack) for a network request.
+   */
+  getRequestInitiator(request: HTTPRequest): RequestInitiator | undefined;
+  /**
+   * Get the initiator by request ID.
+   */
+  getRequestInitiatorById(requestId: number): RequestInitiator | undefined;
+  /**
+   * Get network request by ID.
+   */
+  getNetworkRequestById(reqid: number): HTTPRequest;
 }>;
 
 export function defineTool<Schema extends zod.ZodRawShape>(

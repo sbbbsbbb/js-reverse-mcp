@@ -7,7 +7,7 @@
 import {zod} from '../third_party/index.js';
 
 import {ToolCategory} from './categories.js';
-import {defineTool, timeoutSchema} from './ToolDefinition.js';
+import {defineTool} from './ToolDefinition.js';
 
 export const takeSnapshot = defineTool({
   name: 'take_snapshot',
@@ -41,24 +41,3 @@ in the DevTools Elements panel (if any).`,
   },
 });
 
-export const waitFor = defineTool({
-  name: 'wait_for',
-  description: `Wait for the specified text to appear on the selected page.`,
-  annotations: {
-    category: ToolCategory.NAVIGATION,
-    readOnlyHint: true,
-  },
-  schema: {
-    text: zod.string().describe('Text to appear on the page'),
-    ...timeoutSchema,
-  },
-  handler: async (request, response, context) => {
-    await context.waitForTextOnPage(request.params);
-
-    response.appendResponseLine(
-      `Element with text "${request.params.text}" found.`,
-    );
-
-    response.includeSnapshot();
-  },
-});

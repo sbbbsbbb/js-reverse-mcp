@@ -31,7 +31,37 @@ import {
   type HTTPRequest,
   type Page,
   type PageEvents as PuppeteerPageEvents,
+  CDPSessionEvent,
 } from './third_party/index.js';
+
+/**
+ * Initiator information for a network request.
+ * Contains the call stack when the request was initiated.
+ */
+export interface RequestInitiator {
+  type: 'parser' | 'script' | 'preload' | 'SignedExchange' | 'preflight' | 'other';
+  url?: string;
+  lineNumber?: number;
+  columnNumber?: number;
+  stack?: {
+    callFrames: Array<{
+      functionName: string;
+      scriptId: string;
+      url: string;
+      lineNumber: number;
+      columnNumber: number;
+    }>;
+    parent?: {
+      callFrames: Array<{
+        functionName: string;
+        scriptId: string;
+        url: string;
+        lineNumber: number;
+        columnNumber: number;
+      }>;
+    };
+  };
+}
 
 interface PageEvents extends PuppeteerPageEvents {
   issue: AggregatedIssue;
@@ -358,6 +388,9 @@ class PageIssueSubscriber {
 }
 
 export class NetworkCollector extends PageCollector<HTTPRequest> {
+  #initiators = new WeakMap<Page, Map<string, RequestInitiator>>();
+  #cdpListeners = new WeakMap<Page, (event: Protocol.Network.RequestWillBeSentEvent) => void>();
+
   constructor(
     browser: Browser,
     listeners: (
@@ -373,6 +406,75 @@ export class NetworkCollector extends PageCollector<HTTPRequest> {
   ) {
     super(browser, listeners, includeAllPages);
   }
+
+  override addPage(page: Page): void {
+    super.addPage(page);
+    this.#setupInitiatorCollection(page);
+  }
+
+  #setupInitiatorCollection(page: Page): void {
+    if (this.#initiators.has(page)) {
+      return;
+    }
+
+    const initiatorMap = new Map<string, RequestInitiator>();
+    this.#initiators.set(page, initiatorMap);
+
+    // Listen to CDP events for initiator info
+    const onRequestWillBeSent = (event: Protocol.Network.RequestWillBeSentEvent): void => {
+      if (event.initiator) {
+        initiatorMap.set(event.requestId, event.initiator as RequestInitiator);
+      }
+    };
+
+    this.#cdpListeners.set(page, onRequestWillBeSent);
+
+    // @ts-expect-error _client is internal Puppeteer API
+    const client = page._client() as CDPSession;
+    client.on('Network.requestWillBeSent', onRequestWillBeSent);
+  }
+
+  protected override cleanupPageDestroyed(page: Page): void {
+    super.cleanupPageDestroyed(page);
+
+    const listener = this.#cdpListeners.get(page);
+    if (listener) {
+      try {
+        // @ts-expect-error _client is internal Puppeteer API
+        const client = page._client() as CDPSession;
+        client.off('Network.requestWillBeSent', listener);
+      } catch {
+        // Page might already be closed
+      }
+    }
+    this.#cdpListeners.delete(page);
+    this.#initiators.delete(page);
+  }
+
+  /**
+   * Get the initiator info for a request.
+   * @param page The page the request belongs to
+   * @param request The HTTP request
+   * @returns The initiator info or undefined if not found
+   */
+  getInitiator(page: Page, request: HTTPRequest): RequestInitiator | undefined {
+    const initiatorMap = this.#initiators.get(page);
+    if (!initiatorMap) {
+      return undefined;
+    }
+    // @ts-expect-error id is internal Puppeteer API
+    const requestId = request.id as string;
+    return initiatorMap.get(requestId);
+  }
+
+  /**
+   * Get initiator by CDP request ID.
+   */
+  getInitiatorByRequestId(page: Page, requestId: string): RequestInitiator | undefined {
+    const initiatorMap = this.#initiators.get(page);
+    return initiatorMap?.get(requestId);
+  }
+
   override splitAfterNavigation(page: Page) {
     const navigations = this.storage.get(page) ?? [];
     if (!navigations) {
@@ -395,6 +497,12 @@ export class NetworkCollector extends PageCollector<HTTPRequest> {
       navigations.unshift(fromCurrentNavigation);
     } else {
       navigations.unshift([]);
+    }
+
+    // Clear old initiator data on navigation
+    const initiatorMap = this.#initiators.get(page);
+    if (initiatorMap) {
+      initiatorMap.clear();
     }
   }
 }
