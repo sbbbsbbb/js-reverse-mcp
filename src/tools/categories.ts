@@ -5,20 +5,14 @@
  */
 
 export enum ToolCategory {
-  INPUT = 'input',
   NAVIGATION = 'navigation',
-  EMULATION = 'emulation',
-  PERFORMANCE = 'performance',
   NETWORK = 'network',
   DEBUGGING = 'debugging',
   REVERSE_ENGINEERING = 'reverse_engineering',
 }
 
 export const labels = {
-  [ToolCategory.INPUT]: 'Input automation',
   [ToolCategory.NAVIGATION]: 'Navigation automation',
-  [ToolCategory.EMULATION]: 'Emulation',
-  [ToolCategory.PERFORMANCE]: 'Performance',
   [ToolCategory.NETWORK]: 'Network',
   [ToolCategory.DEBUGGING]: 'Debugging',
   [ToolCategory.REVERSE_ENGINEERING]: 'JS Reverse Engineering',
