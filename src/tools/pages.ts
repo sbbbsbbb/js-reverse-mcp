@@ -148,6 +148,7 @@ export const navigatePage = defineTool({
           try {
             await page.reload({
               ...options,
+              waitUntil: 'domcontentloaded',
               ignoreCache: request.params.ignoreCache,
             });
             response.appendResponseLine(`Successfully reloaded the page.`);
