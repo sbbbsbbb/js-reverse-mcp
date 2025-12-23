@@ -10,6 +10,18 @@ import type {Frame, JSHandle, Page} from '../third_party/index.js';
 import {ToolCategory} from './categories.js';
 import {defineTool} from './ToolDefinition.js';
 
+// Default script evaluation timeout in milliseconds (30 seconds)
+const DEFAULT_SCRIPT_TIMEOUT = 30000;
+
+function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) => {
+      setTimeout(() => reject(new Error(message)), ms);
+    }),
+  ]);
+}
+
 export const evaluateScript = defineTool({
   name: 'evaluate_script',
   description: `Evaluate a JavaScript function inside the currently selected page. Returns the response as JSON
@@ -62,17 +74,23 @@ Example with arguments: \`(el) => {
       } else {
         pageOrFrame = [...frames.values()][0] ?? context.getSelectedPage();
       }
-      const fn = await pageOrFrame.evaluateHandle(
-        `(${request.params.function})`,
+      const fn = await withTimeout(
+        pageOrFrame.evaluateHandle(`(${request.params.function})`),
+        DEFAULT_SCRIPT_TIMEOUT,
+        'Script evaluation timed out',
       );
       args.unshift(fn);
       await context.waitForEventsAfterAction(async () => {
-        const result = await pageOrFrame.evaluate(
-          async (fn, ...args) => {
-            // @ts-expect-error no types.
-            return JSON.stringify(await fn(...args));
-          },
-          ...args,
+        const result = await withTimeout(
+          pageOrFrame.evaluate(
+            async (fn, ...args) => {
+              // @ts-expect-error no types.
+              return JSON.stringify(await fn(...args));
+            },
+            ...args,
+          ),
+          DEFAULT_SCRIPT_TIMEOUT,
+          'Script execution timed out',
         );
         response.appendResponseLine('Script ran on page and returned:');
         response.appendResponseLine('```json');
