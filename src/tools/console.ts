@@ -6,11 +6,11 @@
 
 import {features} from '../features.js';
 import {zod} from '../third_party/index.js';
-import type {ConsoleMessageType} from '../third_party/index.js';
 
 import {ToolCategory} from './categories.js';
 import {defineTool} from './ToolDefinition.js';
-type ConsoleResponseType = ConsoleMessageType | 'issue';
+// Playwright's ConsoleMessage.type() returns a string union directly
+type ConsoleResponseType = string;
 
 const FILTERABLE_MESSAGE_TYPES: [
   ConsoleResponseType,

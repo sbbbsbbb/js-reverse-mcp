@@ -7,11 +7,10 @@
 import './polyfill.js';
 
 import fs from 'node:fs';
-import path from 'node:path';
-import {fileURLToPath} from 'node:url';
 
 import type {Channel} from './browser.js';
 import {ensureBrowserConnected, ensureBrowserLaunched} from './browser.js';
+import type {BrowserResult} from './browser.js';
 import {parseArguments} from './cli.js';
 import {features} from './features.js';
 import {loadIssueDescriptions} from './issue-descriptions.js';
@@ -60,31 +59,14 @@ server.server.setRequestHandler(SetLevelRequestSchema, () => {
 
 let context: McpContext;
 
-const initScript = (() => {
-  if (args.initScript) {
-    return fs.readFileSync(args.initScript, 'utf-8');
-  }
-  // Default: load bundled stealth script to bypass WebDriver detection
-  const projectRoot = path.resolve(
-    path.dirname(fileURLToPath(import.meta.url)),
-    '..',
-    '..',
-  );
-  const parts: string[] = [];
-  const defaultPath = path.join(projectRoot, 'scripts', 'stealth.min.js');
-  try {
-    parts.push(fs.readFileSync(defaultPath, 'utf-8'));
-  } catch {
-    // stealth.min.js not found, continue without it
-  }
-  const patchPath = path.join(projectRoot, 'scripts', 'stealth-patch.js');
-  try {
-    parts.push(fs.readFileSync(patchPath, 'utf-8'));
-  } catch {
-    // patch not found, continue without it
-  }
-  return parts.length > 0 ? parts.join('\n') : undefined;
-})();
+import {STEALTH_INIT_SCRIPT} from './stealth-init.js';
+
+// Combine stealth init script (unless disabled) with user-specified init script.
+const stealthScript = args.noStealth ? '' : STEALTH_INIT_SCRIPT;
+const userScript = args.initScript
+  ? fs.readFileSync(args.initScript, 'utf-8')
+  : '';
+const initScript = (stealthScript + '\n' + userScript).trim() || undefined;
 
 async function getContext(): Promise<McpContext> {
   const extraArgs: string[] = (args.chromeArg ?? []).map(String);
@@ -92,30 +74,36 @@ async function getContext(): Promise<McpContext> {
     extraArgs.push(`--proxy-server=${args.proxyServer}`);
   }
   const devtools = args.experimentalDevtools ?? false;
-  const browser =
-    args.browserUrl || args.wsEndpoint
-      ? await ensureBrowserConnected({
-          browserURL: args.browserUrl,
-          wsEndpoint: args.wsEndpoint,
-          wsHeaders: args.wsHeaders,
-          devtools,
-          initScript,
-        })
-      : await ensureBrowserLaunched({
-          headless: args.headless,
-          executablePath: args.executablePath,
-          channel: args.channel as Channel,
-          isolated: args.isolated,
-          logFile,
-          viewport: args.viewport,
-          args: extraArgs,
-          acceptInsecureCerts: args.acceptInsecureCerts,
-          devtools,
-          initScript,
-        });
+  let result: BrowserResult;
+  if (args.browserUrl || args.wsEndpoint) {
+    result = await ensureBrowserConnected({
+      browserURL: args.browserUrl,
+      wsEndpoint: args.wsEndpoint,
+      wsHeaders: args.wsHeaders,
+      devtools,
+      initScript,
+    });
+  } else {
+    result = await ensureBrowserLaunched({
+      headless: args.headless,
+      executablePath: args.executablePath,
+      channel: args.channel as Channel,
+      isolated: args.isolated,
+      logFile,
+      viewport: args.viewport,
+      args: extraArgs,
+      acceptInsecureCerts: args.acceptInsecureCerts,
+      devtools,
+      initScript,
+      hideCanvas: args.hideCanvas,
+      blockWebrtc: args.blockWebrtc,
+      disableWebgl: args.disableWebgl,
+      noStealth: args.noStealth,
+    });
+  }
 
-  if (context?.browser !== browser) {
-    context = await McpContext.from(browser, logger, {
+  if (!context || context.browserContext !== result.context) {
+    context = await McpContext.from(result.context, logger, {
       experimentalDevToolsDebugging: devtools,
       experimentalIncludeAllPages: args.experimentalIncludeAllPages,
       initScript,
@@ -154,7 +142,13 @@ function registerTool(tool: ToolDefinition): void {
         logger(`${tool.name} request: ${JSON.stringify(params, null, '  ')}`);
         const context = await getContext();
         logger(`${tool.name} context: resolved`);
-        await context.detectOpenDevToolsWindows();
+        // Navigation tools must operate in complete CDP silence.
+        // Anti-bot systems detect ANY CDP activity during page load,
+        // including session creation from detectOpenDevToolsWindows().
+        if (tool.annotations.category !== ToolCategory.NAVIGATION) {
+          await context.ensureCollectorsInitialized();
+          await context.detectOpenDevToolsWindows();
+        }
         const response = new McpResponse();
         await tool.handler(
           {

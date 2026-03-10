@@ -155,6 +155,30 @@ export const cliOptions = {
     default: true,
     describe: 'Set to false to exclude tools related to network.',
   },
+  hideCanvas: {
+    type: 'boolean',
+    description:
+      'Enable canvas fingerprint noise injection.',
+    default: false,
+  },
+  blockWebrtc: {
+    type: 'boolean',
+    description:
+      'Block WebRTC to prevent real IP leakage when using proxy.',
+    default: false,
+  },
+  disableWebgl: {
+    type: 'boolean',
+    description:
+      'Disable WebGL to prevent GPU fingerprinting. Note: some WAFs check for WebGL support.',
+    default: false,
+  },
+  noStealth: {
+    type: 'boolean',
+    description:
+      'Disable stealth launch arguments (for debugging).',
+    default: false,
+  },
 } satisfies Record<string, YargsOptions>;
 
 export function parseArguments(version: string, argv = process.argv) {

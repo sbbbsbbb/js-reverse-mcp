@@ -27,7 +27,6 @@ import type {McpContext} from './McpContext.js';
 import type {
   ConsoleMessage,
   ImageContent,
-  ResourceType,
   TextContent,
 } from './third_party/index.js';
 import type {ImageContentData, Response} from './tools/ToolDefinition.js';
@@ -43,7 +42,7 @@ export class McpResponse implements Response {
   #networkRequestsOptions?: {
     include: boolean;
     pagination?: PaginationOptions;
-    resourceTypes?: ResourceType[];
+    resourceTypes?: string[];
     includePreservedRequests?: boolean;
     networkRequestIdInDevToolsUI?: number;
   };
@@ -68,7 +67,7 @@ export class McpResponse implements Response {
   setIncludeNetworkRequests(
     value: boolean,
     options?: PaginationOptions & {
-      resourceTypes?: ResourceType[];
+      resourceTypes?: string[];
       includePreservedRequests?: boolean;
       networkRequestIdInDevToolsUI?: number;
     },
@@ -223,7 +222,8 @@ export class McpResponse implements Response {
 
       bodies.requestBody = await getFormattedRequestBody(request);
 
-      const response = request.response();
+      // In Playwright, request.response() is async
+      const response = await request.response();
       if (response) {
         bodies.responseBody = await getFormattedResponseBody(response);
       }
@@ -576,26 +576,27 @@ export class McpResponse implements Response {
       response.push(data.requestBody);
     }
 
-    const httpResponse = httpRequest.response();
-    if (httpResponse) {
-      response.push(`### Response Headers`);
-      for (const line of getFormattedHeaderValue(httpResponse.headers())) {
-        response.push(line);
-      }
-    }
+    // Note: response headers are handled in the async path above
+    // since request.response() is async in Playwright
 
     if (data.responseBody) {
       response.push(`### Response Body`);
       response.push(data.responseBody);
     }
 
-    const httpFailure = httpRequest.failure();
-    if (httpFailure) {
+    const failure = httpRequest.failure();
+    if (failure) {
       response.push(`### Request failed with`);
-      response.push(httpFailure.errorText);
+      response.push(failure.errorText);
     }
 
-    const redirectChain = httpRequest.redirectChain();
+    // In Playwright, there's no redirectChain() - use redirectedFrom() instead
+    const redirectChain: typeof httpRequest[] = [];
+    let current = httpRequest.redirectedFrom();
+    while (current) {
+      redirectChain.push(current);
+      current = current.redirectedFrom();
+    }
     if (redirectChain.length) {
       response.push(`### Redirect chain`);
       let indent = 0;

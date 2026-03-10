@@ -4,7 +4,10 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type {CDPSession, Protocol} from './third_party/index.js';
+// Use devtools-protocol types for data structures.
+// The CDPSession is typed as 'any' in this class to bridge
+// devtools-protocol and patchright Protocol type incompatibilities.
+import type {Protocol} from 'devtools-protocol';
 
 export interface ScriptInfo {
   scriptId: string;
@@ -118,7 +121,9 @@ export interface EvaluateResult {
  * It tracks loaded scripts, manages breakpoints, and provides search functionality.
  */
 export class DebuggerContext {
-  #client: CDPSession | null = null;
+  // Use 'any' to bridge devtools-protocol and patchright Protocol type incompatibilities
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  #client: any = null;
   #scripts = new Map<string, ScriptInfo>(); // scriptId -> info
   #urlToScripts = new Map<string, string[]>(); // url -> scriptId[]
   #breakpoints = new Map<string, BreakpointInfo>(); // breakpointId -> info
@@ -128,7 +133,8 @@ export class DebuggerContext {
   /**
    * Enable the debugger and start tracking scripts.
    */
-  async enable(client: CDPSession): Promise<void> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  async enable(client: any): Promise<void> {
     if (this.#enabled && this.#client === client) {
       return;
     }
@@ -193,7 +199,8 @@ export class DebuggerContext {
   /**
    * Get the CDP client.
    */
-  getClient(): CDPSession | null {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  getClient(): any {
     return this.#client;
   }
 
@@ -588,7 +595,8 @@ export class DebuggerContext {
       lineNumber,
       columnNumber,
       condition,
-      locations: result.locations.map(loc => ({
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      locations: result.locations.map((loc: any) => ({
         scriptId: loc.scriptId,
         lineNumber: loc.lineNumber,
         columnNumber: loc.columnNumber ?? 0,
@@ -634,7 +642,8 @@ export class DebuggerContext {
       lineNumber,
       columnNumber,
       condition,
-      locations: result.locations.map(loc => ({
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      locations: result.locations.map((loc: any) => ({
         scriptId: loc.scriptId,
         lineNumber: loc.lineNumber,
         columnNumber: loc.columnNumber ?? 0,

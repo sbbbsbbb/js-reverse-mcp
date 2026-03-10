@@ -19,7 +19,7 @@ export const screenshot = defineTool({
   },
   schema: {
     format: zod
-      .enum(['png', 'jpeg', 'webp'])
+      .enum(['png', 'jpeg'])
       .default('png')
       .describe('Type of format to save the screenshot as. Default is "png"'),
     quality: zod
@@ -28,7 +28,7 @@ export const screenshot = defineTool({
       .max(100)
       .optional()
       .describe(
-        'Compression quality for JPEG and WebP formats (0-100). Higher values mean better quality but larger file sizes. Ignored for PNG format.',
+        'Compression quality for JPEG format (0-100). Higher values mean better quality but larger file sizes. Ignored for PNG format.',
       ),
     fullPage: zod
       .boolean()
@@ -53,7 +53,6 @@ export const screenshot = defineTool({
       type: format,
       fullPage: request.params.fullPage,
       quality,
-      optimizeForSpeed: true, // Bonus: optimize encoding for speed
     });
 
     if (request.params.fullPage) {

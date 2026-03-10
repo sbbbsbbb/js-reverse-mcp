@@ -4,7 +4,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type {KeyInput} from '../third_party/index.js';
+// Playwright doesn't export KeyInput type; use string
+type KeyInput = string;
 
 // See the KeyInput type for the list of supported keys.
 const validKeys = new Set([

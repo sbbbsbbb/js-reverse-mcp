@@ -4,14 +4,13 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import type {CdpSessionProvider} from './CdpSessionProvider.js';
 import type {RequestInitiator} from './PageCollector.js';
 import type {
-  Browser,
-  CDPSession,
+  BrowserContext,
   Page,
-  Protocol,
-  Target,
 } from './third_party/index.js';
+import type {Protocol} from 'devtools-protocol';
 
 /**
  * WebSocket connection status.
@@ -75,8 +74,8 @@ function createIdGenerator() {
  * Listens to CDP Network events for WebSocket activity.
  */
 export class WebSocketCollector {
-  #browser: Browser;
-  #includeAllPages?: boolean;
+  #context: BrowserContext;
+  #sessionProvider: CdpSessionProvider;
 
   /**
    * Storage: Page -> Array of navigations -> Array of WebSocket connections.
@@ -95,61 +94,38 @@ export class WebSocketCollector {
   #idGenerators = new WeakMap<Page, () => number>();
 
   /**
-   * CDP listeners per page.
+   * CDP cleanup per page.
    */
-  #cdpListeners = new WeakMap<
-    Page,
-    {
-      onCreated: (event: Protocol.Network.WebSocketCreatedEvent) => void;
-      onFrameSent: (event: Protocol.Network.WebSocketFrameSentEvent) => void;
-      onFrameReceived: (
-        event: Protocol.Network.WebSocketFrameReceivedEvent,
-      ) => void;
-      onClosed: (event: Protocol.Network.WebSocketClosedEvent) => void;
-      onFrameNavigated: () => void;
-    }
-  >();
+  #cdpCleanup = new WeakMap<Page, () => void>();
 
   #maxNavigationSaved = 3;
 
-  constructor(browser: Browser, includeAllPages?: boolean) {
-    this.#browser = browser;
-    this.#includeAllPages = includeAllPages;
+  constructor(context: BrowserContext, sessionProvider: CdpSessionProvider) {
+    this.#context = context;
+    this.#sessionProvider = sessionProvider;
   }
 
   async init() {
-    // @ts-expect-error includeAllPages param may not exist in older puppeteer-core
-    const pages = await this.#browser.pages(this.#includeAllPages);
+    const pages = this.#context.pages();
     for (const page of pages) {
-      this.addPage(page);
+      await this.addPage(page);
     }
 
-    this.#browser.on('targetcreated', this.#onTargetCreated);
-    this.#browser.on('targetdestroyed', this.#onTargetDestroyed);
+    this.#context.on('page', this.#onPageCreated);
   }
 
   dispose() {
-    this.#browser.off('targetcreated', this.#onTargetCreated);
-    this.#browser.off('targetdestroyed', this.#onTargetDestroyed);
+    this.#context.off('page', this.#onPageCreated);
   }
 
-  #onTargetCreated = async (target: Target) => {
-    const page = await target.page();
-    if (!page) {
-      return;
-    }
-    this.addPage(page);
+  #onPageCreated = async (page: Page) => {
+    await this.addPage(page);
+    page.on('close', () => {
+      this.#cleanupPage(page);
+    });
   };
 
-  #onTargetDestroyed = async (target: Target) => {
-    const page = await target.page();
-    if (!page) {
-      return;
-    }
-    this.#cleanupPage(page);
-  };
-
-  addPage(page: Page) {
+  async addPage(page: Page) {
     if (this.#storage.has(page)) {
       return;
     }
@@ -161,105 +137,107 @@ export class WebSocketCollector {
     this.#storage.set(page, storedLists);
     this.#connectionMap.set(page, new Map());
 
-    this.#setupCdpListeners(page);
+    await this.#setupCdpListeners(page);
   }
 
-  #setupCdpListeners(page: Page): void {
-    // @ts-expect-error _client is internal Puppeteer API
-    const client = page._client() as CDPSession;
+  async #setupCdpListeners(page: Page): Promise<void> {
+    try {
+      const client = await this.#sessionProvider.getSession(page);
 
-    const connectionMap = this.#connectionMap.get(page)!;
-    const idGenerator = this.#idGenerators.get(page)!;
+      const connectionMap = this.#connectionMap.get(page)!;
+      const idGenerator = this.#idGenerators.get(page)!;
 
-    const onCreated = (event: Protocol.Network.WebSocketCreatedEvent): void => {
-      const wsData: WebSocketDataWithId = {
-        connection: {
-          requestId: event.requestId,
-          url: event.url,
-          initiator: event.initiator as RequestInitiator | undefined,
-          status: 'connecting',
-          createdAt: Date.now(),
-        },
-        frames: [],
+      const onCreated = (event: Protocol.Network.WebSocketCreatedEvent): void => {
+        const wsData: WebSocketDataWithId = {
+          connection: {
+            requestId: event.requestId,
+            url: event.url,
+            initiator: event.initiator as RequestInitiator | undefined,
+            status: 'connecting',
+            createdAt: Date.now(),
+          },
+          frames: [],
+        };
+        wsData[stableIdSymbol] = idGenerator();
+
+        connectionMap.set(event.requestId, wsData);
+
+        const navigations = this.#storage.get(page);
+        if (navigations) {
+          navigations[0].push(wsData);
+        }
+
+        // Mark as open once created (CDP doesn't have a separate open event for ws)
+        wsData.connection.status = 'open';
       };
-      wsData[stableIdSymbol] = idGenerator();
 
-      connectionMap.set(event.requestId, wsData);
+      const onFrameSent = (
+        event: Protocol.Network.WebSocketFrameSentEvent,
+      ): void => {
+        const wsData = connectionMap.get(event.requestId);
+        if (!wsData) {
+          return;
+        }
 
-      const navigations = this.#storage.get(page);
-      if (navigations) {
-        navigations[0].push(wsData);
-      }
+        wsData.frames.push({
+          requestId: event.requestId,
+          direction: 'sent',
+          timestamp: event.timestamp * 1000, // Convert to ms
+          opcode: event.response.opcode,
+          payloadData: event.response.payloadData,
+        });
+      };
 
-      // Mark as open once created (CDP doesn't have a separate open event for ws)
-      wsData.connection.status = 'open';
-    };
+      const onFrameReceived = (
+        event: Protocol.Network.WebSocketFrameReceivedEvent,
+      ): void => {
+        const wsData = connectionMap.get(event.requestId);
+        if (!wsData) {
+          return;
+        }
 
-    const onFrameSent = (
-      event: Protocol.Network.WebSocketFrameSentEvent,
-    ): void => {
-      const wsData = connectionMap.get(event.requestId);
-      if (!wsData) {
-        return;
-      }
+        wsData.frames.push({
+          requestId: event.requestId,
+          direction: 'received',
+          timestamp: event.timestamp * 1000, // Convert to ms
+          opcode: event.response.opcode,
+          payloadData: event.response.payloadData,
+        });
+      };
 
-      wsData.frames.push({
-        requestId: event.requestId,
-        direction: 'sent',
-        timestamp: event.timestamp * 1000, // Convert to ms
-        opcode: event.response.opcode,
-        payloadData: event.response.payloadData,
+      const onClosed = (event: Protocol.Network.WebSocketClosedEvent): void => {
+        const wsData = connectionMap.get(event.requestId);
+        if (!wsData) {
+          return;
+        }
+
+        wsData.connection.status = 'closed';
+        wsData.connection.closedAt = event.timestamp * 1000;
+      };
+
+      const onFrameNavigated = (): void => {
+        this.#splitAfterNavigation(page);
+      };
+
+      client.on('Network.webSocketCreated' as any, onCreated);
+      client.on('Network.webSocketFrameSent' as any, onFrameSent);
+      client.on('Network.webSocketFrameReceived' as any, onFrameReceived);
+      client.on('Network.webSocketClosed' as any, onClosed);
+      page.on('framenavigated', frame => {
+        if (frame === page.mainFrame()) {
+          onFrameNavigated();
+        }
       });
-    };
 
-    const onFrameReceived = (
-      event: Protocol.Network.WebSocketFrameReceivedEvent,
-    ): void => {
-      const wsData = connectionMap.get(event.requestId);
-      if (!wsData) {
-        return;
-      }
-
-      wsData.frames.push({
-        requestId: event.requestId,
-        direction: 'received',
-        timestamp: event.timestamp * 1000, // Convert to ms
-        opcode: event.response.opcode,
-        payloadData: event.response.payloadData,
+      this.#cdpCleanup.set(page, () => {
+        client.off('Network.webSocketCreated' as any, onCreated);
+        client.off('Network.webSocketFrameSent' as any, onFrameSent);
+        client.off('Network.webSocketFrameReceived' as any, onFrameReceived);
+        client.off('Network.webSocketClosed' as any, onClosed);
       });
-    };
-
-    const onClosed = (event: Protocol.Network.WebSocketClosedEvent): void => {
-      const wsData = connectionMap.get(event.requestId);
-      if (!wsData) {
-        return;
-      }
-
-      wsData.connection.status = 'closed';
-      wsData.connection.closedAt = event.timestamp * 1000;
-    };
-
-    const onFrameNavigated = (): void => {
-      this.#splitAfterNavigation(page);
-    };
-
-    client.on('Network.webSocketCreated', onCreated);
-    client.on('Network.webSocketFrameSent', onFrameSent);
-    client.on('Network.webSocketFrameReceived', onFrameReceived);
-    client.on('Network.webSocketClosed', onClosed);
-    page.on('framenavigated', frame => {
-      if (frame === page.mainFrame()) {
-        onFrameNavigated();
-      }
-    });
-
-    this.#cdpListeners.set(page, {
-      onCreated,
-      onFrameSent,
-      onFrameReceived,
-      onClosed,
-      onFrameNavigated,
-    });
+    } catch {
+      // Page might already be closed
+    }
   }
 
   #splitAfterNavigation(page: Page): void {
@@ -277,21 +255,16 @@ export class WebSocketCollector {
   }
 
   #cleanupPage(page: Page): void {
-    const listeners = this.#cdpListeners.get(page);
-    if (listeners) {
+    const cleanup = this.#cdpCleanup.get(page);
+    if (cleanup) {
       try {
-        // @ts-expect-error _client is internal Puppeteer API
-        const client = page._client() as CDPSession;
-        client.off('Network.webSocketCreated', listeners.onCreated);
-        client.off('Network.webSocketFrameSent', listeners.onFrameSent);
-        client.off('Network.webSocketFrameReceived', listeners.onFrameReceived);
-        client.off('Network.webSocketClosed', listeners.onClosed);
+        cleanup();
       } catch {
         // Page might already be closed
       }
     }
 
-    this.#cdpListeners.delete(page);
+    this.#cdpCleanup.delete(page);
     this.#storage.delete(page);
     this.#connectionMap.delete(page);
     this.#idGenerators.delete(page);

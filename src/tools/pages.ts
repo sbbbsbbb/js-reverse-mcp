@@ -47,6 +47,9 @@ export const selectPage = defineTool({
   },
 });
 
+// Default referer for anti-detection (matches Scrapling's google_search=True behavior)
+const DEFAULT_REFERER = 'https://www.google.com/';
+
 export const newPage = defineTool({
   name: 'new_page',
   description: `Creates a new page and navigates to the specified URL. Waits for DOMContentLoaded event (not full page load). Default timeout is 10 seconds.`,
@@ -61,11 +64,13 @@ export const newPage = defineTool({
   handler: async (request, response, context) => {
     const page = await context.newPage();
 
-    await context.waitForEventsAfterAction(async () => {
-      await page.goto(request.params.url, {
-        timeout: request.params.timeout ?? DEFAULT_NAV_TIMEOUT,
-        waitUntil: 'domcontentloaded',
-      });
+    // Use plain goto without waitForEventsAfterAction to avoid creating
+    // a CDP session during navigation. Anti-bot systems detect the extra
+    // CDP session that WaitForHelper creates (Page.frameStartedNavigating listener).
+    await page.goto(request.params.url, {
+      timeout: request.params.timeout ?? DEFAULT_NAV_TIMEOUT,
+      waitUntil: 'domcontentloaded',
+      referer: DEFAULT_REFERER,
     });
 
     response.setIncludePages(true);
@@ -107,73 +112,81 @@ export const navigatePage = defineTool({
       request.params.type = 'url';
     }
 
-    await context.waitForEventsAfterAction(async () => {
-      switch (request.params.type) {
-        case 'url':
-          if (!request.params.url) {
-            throw new Error('A URL is required for navigation of type=url.');
-          }
-          try {
-            await page.goto(request.params.url, {
-              ...options,
-              waitUntil: 'domcontentloaded',
-            });
-            response.appendResponseLine(
-              `Successfully navigated to ${request.params.url}.`,
-            );
-          } catch (error) {
-            response.appendResponseLine(
-              `Unable to navigate in the  selected page: ${error.message}.`,
-            );
-          }
-          break;
-        case 'back':
-          try {
-            await page.goBack({
-              ...options,
-              waitUntil: 'domcontentloaded',
-            });
-            response.appendResponseLine(
-              `Successfully navigated back to ${page.url()}.`,
-            );
-          } catch (error) {
-            response.appendResponseLine(
-              `Unable to navigate back in the selected page: ${error.message}.`,
-            );
-          }
-          break;
-        case 'forward':
-          try {
-            await page.goForward({
-              ...options,
-              waitUntil: 'domcontentloaded',
-            });
-            response.appendResponseLine(
-              `Successfully navigated forward to ${page.url()}.`,
-            );
-          } catch (error) {
-            response.appendResponseLine(
-              `Unable to navigate forward in the selected page: ${error.message}.`,
-            );
-          }
-          break;
-        case 'reload':
-          try {
+    // Use plain navigation without waitForEventsAfterAction to avoid creating
+    // a CDP session during navigation. Anti-bot systems detect the extra
+    // CDP session that WaitForHelper creates (Page.frameStartedNavigating listener).
+    switch (request.params.type) {
+      case 'url':
+        if (!request.params.url) {
+          throw new Error('A URL is required for navigation of type=url.');
+        }
+        try {
+          await page.goto(request.params.url, {
+            ...options,
+            waitUntil: 'domcontentloaded',
+            referer: DEFAULT_REFERER,
+          });
+          response.appendResponseLine(
+            `Successfully navigated to ${request.params.url}.`,
+          );
+        } catch (error) {
+          response.appendResponseLine(
+            `Unable to navigate in the  selected page: ${error.message}.`,
+          );
+        }
+        break;
+      case 'back':
+        try {
+          await page.goBack({
+            ...options,
+            waitUntil: 'domcontentloaded',
+          });
+          response.appendResponseLine(
+            `Successfully navigated back to ${page.url()}.`,
+          );
+        } catch (error) {
+          response.appendResponseLine(
+            `Unable to navigate back in the selected page: ${error.message}.`,
+          );
+        }
+        break;
+      case 'forward':
+        try {
+          await page.goForward({
+            ...options,
+            waitUntil: 'domcontentloaded',
+          });
+          response.appendResponseLine(
+            `Successfully navigated forward to ${page.url()}.`,
+          );
+        } catch (error) {
+          response.appendResponseLine(
+            `Unable to navigate forward in the selected page: ${error.message}.`,
+          );
+        }
+        break;
+      case 'reload':
+        try {
+          // For ignoreCache, use CDP Page.reload directly
+          if (request.params.ignoreCache) {
+            const session = await context.getSelectedPage().context().newCDPSession(page);
+            await session.send('Page.reload', {ignoreCache: true});
+            await page.waitForLoadState('domcontentloaded', {timeout: options.timeout});
+            await session.detach();
+          } else {
             await page.reload({
               ...options,
               waitUntil: 'domcontentloaded',
-              // @ts-expect-error ignoreCache may not exist in older puppeteer-core
-              ignoreCache: request.params.ignoreCache,
             });
-            response.appendResponseLine(`Successfully reloaded the page.`);
-          } catch (error) {
-            response.appendResponseLine(
-              `Unable to reload the selected page: ${error.message}.`,
-            );
           }
-          break;
-      }
-    });
+          response.appendResponseLine(`Successfully reloaded the page.`);
+        } catch (error) {
+          response.appendResponseLine(
+            `Unable to reload the selected page: ${error.message}.`,
+          );
+        }
+        break;
+    }
 
     response.setIncludePages(true);
   },

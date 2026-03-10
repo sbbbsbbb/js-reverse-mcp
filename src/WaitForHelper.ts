@@ -4,19 +4,22 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import type {CdpSessionProvider} from './CdpSessionProvider.js';
 import {logger} from './logger.js';
-import type {Page, Protocol, CdpPage} from './third_party/index.js';
+import type {CDPSession, Page} from './third_party/index.js';
 
 export class WaitForHelper {
   #abortController = new AbortController();
-  #page: CdpPage;
+  #page: Page;
+  #cdpSession: CDPSession;
   #stableDomTimeout: number;
   #stableDomFor: number;
   #expectNavigationIn: number;
   #navigationTimeout: number;
 
-  constructor(
+  private constructor(
     page: Page,
+    cdpSession: CDPSession,
     cpuTimeoutMultiplier: number,
     networkTimeoutMultiplier: number,
   ) {
@@ -24,7 +27,18 @@ export class WaitForHelper {
     this.#stableDomFor = 100 * cpuTimeoutMultiplier;
     this.#expectNavigationIn = 100 * cpuTimeoutMultiplier;
     this.#navigationTimeout = 3000 * networkTimeoutMultiplier;
-    this.#page = page as unknown as CdpPage;
+    this.#page = page;
+    this.#cdpSession = cdpSession;
+  }
+
+  static async create(
+    page: Page,
+    sessionProvider: CdpSessionProvider,
+    cpuTimeoutMultiplier: number,
+    networkTimeoutMultiplier: number,
+  ): Promise<WaitForHelper> {
+    const session = await sessionProvider.getSession(page);
+    return new WaitForHelper(page, session, cpuTimeoutMultiplier, networkTimeoutMultiplier);
   }
 
   /**
@@ -82,10 +96,8 @@ export class WaitForHelper {
   }
 
   async waitForNavigationStarted() {
-    // Currently Puppeteer does not have API
-    // For when a navigation is about to start
     const navigationStartedPromise = new Promise<boolean>(resolve => {
-      const listener = (event: Protocol.Page.FrameStartedNavigatingEvent) => {
+      const listener = (event: {navigationType: string}) => {
         if (
           [
             'historySameDocument',
@@ -100,10 +112,10 @@ export class WaitForHelper {
         resolve(true);
       };
 
-      this.#page._client().on('Page.frameStartedNavigating', listener);
+      this.#cdpSession.on('Page.frameStartedNavigating' as any, listener);
       this.#abortController.signal.addEventListener('abort', () => {
         resolve(false);
-        this.#page._client().off('Page.frameStartedNavigating', listener);
+        this.#cdpSession.off('Page.frameStartedNavigating' as any, listener);
       });
     });
 
@@ -138,12 +150,10 @@ export class WaitForHelper {
 
     const doAction = async () => {
       const navigationFinished = this.waitForNavigationStarted()
-        .then(navigationStated => {
-          if (navigationStated) {
-            return this.#page.waitForNavigation({
+        .then(navigationStarted => {
+          if (navigationStarted) {
+            return this.#page.waitForLoadState('domcontentloaded', {
               timeout: this.#navigationTimeout,
-              waitUntil: 'domcontentloaded',
-              signal: this.#abortController.signal,
             });
           }
           return;
