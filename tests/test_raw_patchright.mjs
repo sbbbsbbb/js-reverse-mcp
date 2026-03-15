@@ -1,4 +1,10 @@
 /**
+ * @license
+ * Copyright 2025 Google LLC
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/**
  * Minimal Patchright test - no MCP framework, no CDP sessions, no event listeners.
  * Tests whether raw Patchright Node.js can open Zhihu without being blocked.
  *

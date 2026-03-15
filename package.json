@@ -1,10 +1,27 @@
 {
   "name": "js-reverse-mcp",
-  "version": "1.0.0",
-  "description": "MCP server for JavaScript reverse engineering and debugging. Built on Patchright anti-detection engine, passes mainstream browser fingerprint checks out of the box.",
+  "version": "1.0.1",
+  "description": "JS reverse engineering MCP server with agent-first tool design and built-in anti-detection. 为 AI Agent 设计的 JS 逆向 MCP Server，内置反检测。",
+  "keywords": [
+    "mcp",
+    "mcp-server",
+    "javascript",
+    "reverse-engineering",
+    "devtools",
+    "debugging",
+    "anti-detection",
+    "stealth",
+    "patchright",
+    "chrome",
+    "cdp",
+    "ai-agent",
+    "js-reverse"
+  ],
   "type": "module",
-  "bin": "./build/src/index.js",
-  "main": "index.js",
+  "bin": {
+    "js-reverse-mcp": "build/src/index.js"
+  },
+  "main": "build/src/index.js",
   "scripts": {
     "clean": "node -e \"require('fs').rmSync('build', {recursive: true, force: true})\"",
     "bundle": "npm run clean && npm run build && rollup -c rollup.config.mjs",
@@ -30,7 +47,10 @@
     "LICENSE",
     "!*.tsbuildinfo"
   ],
-  "repository": "zhizhuodemao/js-reverse-mcp",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zhizhuodemao/js-reverse-mcp.git"
+  },
   "author": "zhizhuodemao",
   "license": "Apache-2.0",
   "bugs": {

@@ -152,3 +152,9 @@ log.txt
 
 # MCP config
 .mcp.json
+
+# npm auth
+.npmrc
+
+# 本地运维文档（含密钥）
+项目运维文档.md
