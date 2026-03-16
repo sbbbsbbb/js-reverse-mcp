@@ -329,42 +329,90 @@ export class DebuggerContext {
   }
 
   /**
-   * Step over the next statement.
+   * Wait for the next Debugger.paused event after a step command.
+   * Returns the top call frame from the new paused state.
    */
-  async stepOver(): Promise<void> {
+  #waitForPaused(timeoutMs = 10000): Promise<CallFrame> {
+    return new Promise<CallFrame>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.#client?.off('Debugger.paused', onPaused);
+        reject(new Error('Timed out waiting for debugger to pause after step'));
+      }, timeoutMs);
+
+      const onPaused = (event: Protocol.Debugger.PausedEvent): void => {
+        clearTimeout(timer);
+        this.#client?.off('Debugger.paused', onPaused);
+        // The #onPaused handler will also fire and update #pausedState.
+        // We resolve with the top frame from the event directly.
+        const topFrame = event.callFrames[0];
+        if (topFrame) {
+          resolve({
+            callFrameId: topFrame.callFrameId,
+            functionName: topFrame.functionName || '<anonymous>',
+            location: {
+              scriptId: topFrame.location.scriptId,
+              lineNumber: topFrame.location.lineNumber,
+              columnNumber: topFrame.location.columnNumber ?? 0,
+            },
+            url: topFrame.url || '',
+            scopeChain: [],
+            this: {type: topFrame.this.type},
+          });
+        } else {
+          reject(new Error('Paused with no call frames'));
+        }
+      };
+
+      this.#client.on('Debugger.paused', onPaused);
+    });
+  }
+
+  /**
+   * Step over the next statement.
+   * Returns the top call frame after pausing.
+   */
+  async stepOver(): Promise<CallFrame> {
     if (!this.#client) {
       throw new Error('Debugger not enabled');
     }
     if (!this.#pausedState.isPaused) {
       throw new Error('Execution is not paused');
     }
+    const pausedPromise = this.#waitForPaused();
     await this.#client.send('Debugger.stepOver');
+    return pausedPromise;
   }
 
   /**
    * Step into the next function call.
+   * Returns the top call frame after pausing.
    */
-  async stepInto(): Promise<void> {
+  async stepInto(): Promise<CallFrame> {
     if (!this.#client) {
       throw new Error('Debugger not enabled');
     }
     if (!this.#pausedState.isPaused) {
       throw new Error('Execution is not paused');
     }
+    const pausedPromise = this.#waitForPaused();
     await this.#client.send('Debugger.stepInto');
+    return pausedPromise;
   }
 
   /**
    * Step out of the current function.
+   * Returns the top call frame after pausing.
    */
-  async stepOut(): Promise<void> {
+  async stepOut(): Promise<CallFrame> {
     if (!this.#client) {
       throw new Error('Debugger not enabled');
     }
     if (!this.#pausedState.isPaused) {
       throw new Error('Execution is not paused');
     }
+    const pausedPromise = this.#waitForPaused();
     await this.#client.send('Debugger.stepOut');
+    return pausedPromise;
   }
 
   /**
@@ -814,7 +862,7 @@ export class DebuggerContext {
   }
 
   /**
-   * Remove all breakpoints.
+   * Remove all breakpoints (code breakpoints + XHR breakpoints).
    */
   async removeAllBreakpoints(): Promise<void> {
     if (!this.#client) {
@@ -827,6 +875,15 @@ export class DebuggerContext {
         await this.removeBreakpoint(breakpointId);
       } catch {
         // Ignore errors for individual breakpoints
+      }
+    }
+
+    const xhrUrls = Array.from(this.#xhrBreakpoints);
+    for (const url of xhrUrls) {
+      try {
+        await this.removeXHRBreakpoint(url);
+      } catch {
+        // Ignore errors for individual XHR breakpoints
       }
     }
   }

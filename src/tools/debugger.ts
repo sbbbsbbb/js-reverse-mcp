@@ -14,10 +14,49 @@
  * - Request initiator (call stack) analysis
  */
 
+import type {CallFrame, DebuggerContext} from '../DebuggerContext.js';
 import {zod} from '../third_party/index.js';
 
 import {ToolCategory} from './categories.js';
+import type {Response} from './ToolDefinition.js';
 import {defineTool} from './ToolDefinition.js';
+
+/**
+ * After a step command, append a concise summary of where execution stopped.
+ * Includes function name, URL, line number, and a few lines of source context.
+ */
+async function appendStepSummary(
+  response: Response,
+  debugger_: DebuggerContext,
+  action: string,
+  frame: CallFrame,
+): Promise<void> {
+  const line = frame.location.lineNumber + 1; // CDP is 0-based
+  const col = frame.location.columnNumber + 1;
+  const funcName = frame.functionName || '<anonymous>';
+  const url = frame.url || `script:${frame.location.scriptId}`;
+  const shortUrl = url.split('/').pop() || url;
+
+  response.appendResponseLine(
+    `${action} → ${shortUrl}:${line}:${col}, function ${funcName}`,
+  );
+
+  // Try to fetch a small source snippet around the current line
+  try {
+    const source = await debugger_.getScriptSource(frame.location.scriptId);
+    const lines = source.split('\n');
+    const start = Math.max(0, frame.location.lineNumber - 2);
+    const end = Math.min(lines.length, frame.location.lineNumber + 3);
+    response.appendResponseLine('```js');
+    for (let i = start; i < end; i++) {
+      const marker = i === frame.location.lineNumber ? '>' : ' ';
+      response.appendResponseLine(`${marker} ${i + 1} | ${lines[i]}`);
+    }
+    response.appendResponseLine('```');
+  } catch {
+    // Source unavailable, the location line is enough
+  }
+}
 
 /**
  * List all loaded JavaScript scripts in the current page.
@@ -509,12 +548,14 @@ export const searchInSources = defineTool({
 });
 
 /**
- * Remove a breakpoint.
+ * Remove breakpoint(s). Supports removing a single code breakpoint by ID,
+ * a single XHR breakpoint by URL, or all breakpoints at once.
+ * Automatically resumes execution if currently paused.
  */
 export const removeBreakpoint = defineTool({
   name: 'remove_breakpoint',
   description:
-    'Removes a breakpoint by its ID. Use list_breakpoints to see active breakpoints.',
+    'Removes breakpoints and automatically resumes execution if paused. Pass breakpointId to remove a code breakpoint, url to remove an XHR breakpoint, or neither to remove ALL breakpoints (code + XHR).',
   annotations: {
     title: 'Remove Breakpoint',
     category: ToolCategory.REVERSE_ENGINEERING,
@@ -523,9 +564,14 @@ export const removeBreakpoint = defineTool({
   schema: {
     breakpointId: zod
       .string()
+      .optional()
       .describe(
         'The breakpoint ID to remove (from list_breakpoints or set_breakpoint_on_text).',
       ),
+    url: zod
+      .string()
+      .optional()
+      .describe('The XHR breakpoint URL pattern to remove.'),
   },
   handler: async (request, response, context) => {
     const debugger_ = context.debuggerContext;
@@ -537,53 +583,48 @@ export const removeBreakpoint = defineTool({
       return;
     }
 
-    const {breakpointId} = request.params;
+    const {breakpointId, url} = request.params;
 
     try {
-      await debugger_.removeBreakpoint(breakpointId);
-      response.appendResponseLine(
-        `Breakpoint ${breakpointId} removed successfully.`,
-      );
+      if (breakpointId) {
+        // Remove a single code breakpoint by ID
+        await debugger_.removeBreakpoint(breakpointId);
+        response.appendResponseLine(
+          `Breakpoint ${breakpointId} removed.`,
+        );
+      } else if (url) {
+        // Remove a single XHR breakpoint by URL
+        await debugger_.removeXHRBreakpoint(url);
+        response.appendResponseLine(
+          `XHR breakpoint for "${url}" removed.`,
+        );
+      } else {
+        // Remove all breakpoints (code + XHR)
+        const codeCount = debugger_.getBreakpoints().length;
+        const xhrCount = debugger_.getXHRBreakpoints().length;
+        if (codeCount === 0 && xhrCount === 0) {
+          response.appendResponseLine('No active breakpoints to remove.');
+          return;
+        }
+        await debugger_.removeAllBreakpoints();
+        const parts: string[] = [];
+        if (codeCount > 0) parts.push(`${codeCount} code`);
+        if (xhrCount > 0) parts.push(`${xhrCount} XHR`);
+        response.appendResponseLine(
+          `Removed ${parts.join(' + ')} breakpoint(s).`,
+        );
+      }
+
+      // Auto-resume if currently paused
+      if (debugger_.isPaused()) {
+        await debugger_.resume();
+        response.appendResponseLine('▶️ Execution resumed.');
+      }
     } catch (error) {
       response.appendResponseLine(
-        `Error removing breakpoint: ${error instanceof Error ? error.message : String(error)}`,
+        `Error: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
-  },
-});
-
-/**
- * Remove all breakpoints.
- */
-export const removeAllBreakpoints = defineTool({
-  name: 'remove_all_breakpoints',
-  description:
-    'Removes all active breakpoints. Use this to clean up debugging state.',
-  annotations: {
-    title: 'Remove All Breakpoints',
-    category: ToolCategory.REVERSE_ENGINEERING,
-    readOnlyHint: false,
-  },
-  schema: {},
-  handler: async (request, response, context) => {
-    const debugger_ = context.debuggerContext;
-
-    if (!debugger_.isEnabled()) {
-      response.appendResponseLine(
-        'Debugger is not enabled. Please select a page first.',
-      );
-      return;
-    }
-
-    const breakpoints = debugger_.getBreakpoints();
-    if (breakpoints.length === 0) {
-      response.appendResponseLine('No active breakpoints to remove.');
-      return;
-    }
-
-    const count = breakpoints.length;
-    await debugger_.removeAllBreakpoints();
-    response.appendResponseLine(`Removed ${count} breakpoint(s).`);
   },
 });
 
@@ -961,10 +1002,8 @@ export const stepOver = defineTool({
     }
 
     try {
-      await debugger_.stepOver();
-      response.appendResponseLine(
-        '⏭️ Stepped over. Use get_paused_info to see current state.',
-      );
+      const frame = await debugger_.stepOver();
+      await appendStepSummary(response, debugger_, '⏭️ Stepped over', frame);
     } catch (error) {
       response.appendResponseLine(
         `Error stepping over: ${error instanceof Error ? error.message : String(error)}`,
@@ -1002,10 +1041,8 @@ export const stepInto = defineTool({
     }
 
     try {
-      await debugger_.stepInto();
-      response.appendResponseLine(
-        '⬇️ Stepped into. Use get_paused_info to see current state.',
-      );
+      const frame = await debugger_.stepInto();
+      await appendStepSummary(response, debugger_, '⬇️ Stepped into', frame);
     } catch (error) {
       response.appendResponseLine(
         `Error stepping into: ${error instanceof Error ? error.message : String(error)}`,
@@ -1043,10 +1080,8 @@ export const stepOut = defineTool({
     }
 
     try {
-      await debugger_.stepOut();
-      response.appendResponseLine(
-        '⬆️ Stepped out. Use get_paused_info to see current state.',
-      );
+      const frame = await debugger_.stepOut();
+      await appendStepSummary(response, debugger_, '⬆️ Stepped out', frame);
     } catch (error) {
       response.appendResponseLine(
         `Error stepping out: ${error instanceof Error ? error.message : String(error)}`,
@@ -1260,42 +1295,6 @@ export const breakOnXhr = defineTool({
   },
 });
 
-/**
- * Remove XHR/Fetch breakpoint.
- */
-export const removeXhrBreakpoint = defineTool({
-  name: 'remove_xhr_breakpoint',
-  description: 'Removes an XHR/Fetch breakpoint.',
-  annotations: {
-    title: 'Remove XHR Breakpoint',
-    category: ToolCategory.REVERSE_ENGINEERING,
-    readOnlyHint: false,
-  },
-  schema: {
-    url: zod.string().describe('The URL pattern to remove breakpoint for.'),
-  },
-  handler: async (request, response, context) => {
-    const debugger_ = context.debuggerContext;
-
-    if (!debugger_.isEnabled()) {
-      response.appendResponseLine(
-        'Debugger is not enabled. Please select a page first.',
-      );
-      return;
-    }
-
-    const {url} = request.params;
-
-    try {
-      await debugger_.removeXHRBreakpoint(url);
-      response.appendResponseLine(`✅ XHR breakpoint removed for: "${url}"`);
-    } catch (error) {
-      response.appendResponseLine(
-        `Error: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
-  },
-});
 
 /**
  * Trace a function by name - works for module-internal functions.
