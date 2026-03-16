@@ -23,7 +23,7 @@ import {defineTool} from './ToolDefinition.js';
 
 /**
  * After a step command, append a concise summary of where execution stopped.
- * Includes function name, URL, line number, and a few lines of source context.
+ * Shows: function name, location, arguments, and a small code snippet.
  */
 async function appendStepSummary(
   response: Response,
@@ -41,20 +41,39 @@ async function appendStepSummary(
     `${action} → ${shortUrl}:${line}:${col}, function ${funcName}`,
   );
 
-  // Try to fetch a small source snippet around the current line
+  // Show function arguments via evaluateOnCallFrame
+  try {
+    const argsResult = await debugger_.evaluateOnCallFrame(
+      frame.callFrameId,
+      `(() => { try { return JSON.stringify(Array.from(arguments)).slice(0, 500); } catch(e) { return String(arguments.length) + ' args'; } })()`,
+      {returnByValue: true},
+    );
+    if (argsResult.result.value && !argsResult.exceptionDetails) {
+      response.appendResponseLine(`  args: ${argsResult.result.value}`);
+    }
+  } catch {
+    // arguments not available (e.g. arrow function or global scope)
+  }
+
+  // Show a small code snippet around the exact column position
   try {
     const source = await debugger_.getScriptSource(frame.location.scriptId);
     const lines = source.split('\n');
-    const start = Math.max(0, frame.location.lineNumber - 2);
-    const end = Math.min(lines.length, frame.location.lineNumber + 3);
-    response.appendResponseLine('```js');
-    for (let i = start; i < end; i++) {
-      const marker = i === frame.location.lineNumber ? '>' : ' ';
-      response.appendResponseLine(`${marker} ${i + 1} | ${lines[i]}`);
+    const lineContent = lines[frame.location.lineNumber];
+    if (lineContent) {
+      const snippetLen = 200;
+      const half = Math.floor(snippetLen / 2);
+      const c = frame.location.columnNumber;
+      const s = Math.max(0, c - half);
+      const e = Math.min(lineContent.length, s + snippetLen);
+      const prefix = s > 0 ? '...' : '';
+      const suffix = e < lineContent.length ? '...' : '';
+      response.appendResponseLine(
+        `  > ${prefix}${lineContent.substring(s, e)}${suffix}`,
+      );
     }
-    response.appendResponseLine('```');
   } catch {
-    // Source unavailable, the location line is enough
+    // Source unavailable
   }
 }
 
