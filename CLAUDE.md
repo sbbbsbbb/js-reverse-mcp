@@ -50,7 +50,7 @@ npx @modelcontextprotocol/inspector node build/src/index.js
 
 ## Architecture Overview
 
-This is an MCP (Model Context Protocol) server that exposes Chrome DevTools functionality to AI coding assistants via Puppeteer.
+This is an MCP (Model Context Protocol) server that exposes Chrome DevTools functionality to AI coding assistants via Patchright.
 
 ### Core Components
 
@@ -87,7 +87,7 @@ Tool categories are defined in `src/tools/categories.ts` and can be disabled via
 
 ### Third-Party Integration
 
-- **`src/third_party/index.ts`**: Re-exports from bundled dependencies (puppeteer, @modelcontextprotocol/sdk, zod).
+- **`src/third_party/index.ts`**: Re-exports from bundled dependencies (patchright, @modelcontextprotocol/sdk, zod).
 
 - **`chrome-devtools-frontend`**: Used for performance trace analysis and issue descriptions. Included via tsconfig.json.
 
@@ -104,3 +104,18 @@ Tests use Node.js built-in test runner. Test files mirror source structure under
 - Follow [conventional commits](https://www.conventionalcommits.org/) for PR and commit titles
 - Run `npm run docs` after adding or modifying tools to update documentation
 - Node version: v22 (see .nvmrc)
+
+## Repository & Publishing
+
+- **GitHub**: https://github.com/zhizhuodemao/js-reverse-mcp
+- **npm**: https://www.npmjs.com/package/js-reverse-mcp
+- **Install**: `npx js-reverse-mcp`
+- **MCP config**:
+  ```json
+  "js-reverse": {
+    "command": "npx",
+    "args": ["js-reverse-mcp"]
+  }
+  ```
+- Publish to npm: `npm publish` (requires npm login)
+- Create GitHub release: `gh release create v<version>`

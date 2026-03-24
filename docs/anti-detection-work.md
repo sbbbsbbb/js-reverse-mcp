@@ -1,5 +1,7 @@
 # js-reverse-mcp 反检测工作记录
 
+[English](anti-detection-work.en.md) | 中文
+
 ## 背景
 
 js-reverse-mcp 是一个基于 Node.js 的 MCP Server，使用 Patchright (Node.js) 控制 Chrome 浏览器，为 AI 编码助手提供 DevTools 调试能力。

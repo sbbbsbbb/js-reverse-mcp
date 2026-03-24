@@ -56,6 +56,14 @@ Example with arguments: \`(el) => {
           'Use this when you need to access page-defined globals (e.g. window.bdms, window.app). ' +
           'The function must be synchronous and return a JSON-serializable value.',
       ),
+    frameIndex: zod
+      .number()
+      .int()
+      .optional()
+      .describe(
+        'When paused at a breakpoint, which call frame to evaluate in (0 = top frame). ' +
+          'If omitted, uses the top frame. Use get_paused_info to see available frames.',
+      ),
   },
   handler: async (request, response, context) => {
     // When paused at a breakpoint, evaluate in the paused call frame context
@@ -63,7 +71,13 @@ Example with arguments: \`(el) => {
     const debugger_ = context.debuggerContext;
     if (debugger_.isEnabled() && debugger_.isPaused()) {
       const pausedState = debugger_.getPausedState();
-      const callFrameId = pausedState.callFrames[0]?.callFrameId;
+      const frameIdx = request.params.frameIndex ?? 0;
+      if (frameIdx < 0 || frameIdx >= pausedState.callFrames.length) {
+        throw new Error(
+          `frameIndex ${frameIdx} is out of range (0-${pausedState.callFrames.length - 1})`,
+        );
+      }
+      const callFrameId = pausedState.callFrames[frameIdx]?.callFrameId;
       if (callFrameId) {
         const expression = `JSON.stringify((${request.params.function})())`;
         const result = await debugger_.evaluateOnCallFrame(

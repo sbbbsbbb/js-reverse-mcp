@@ -1,50 +1,37 @@
 # JS Reverse MCP
 
-JavaScript 逆向工程 MCP 服务器，让你的 AI 编码助手（如 Claude、Cursor、Copilot）能够调试和分析网页中的 JavaScript 代码。
+English | [中文](README_zh.md)
 
-基于 [Patchright](https://github.com/nicecaesar/patchright) 反检测引擎，内置多层反爬绕过能力，可在知乎、Google 等有风控检测的站点正常工作。
+A JavaScript reverse engineering MCP server that enables AI coding assistants (Claude, Cursor, Copilot) to debug and analyze JavaScript code in web pages.
 
-## 功能特点
+Built on the [Patchright](https://github.com/nicecaesar/patchright) anti-detection engine with multi-layered anti-bot bypass capabilities, allowing it to work on sites with bot detection such as Zhihu and Google.
 
-- **反检测浏览器**: 基于 Patchright（Playwright 反检测分支），60+ 隐身启动参数，绕过主流反爬系统
-- **脚本分析**: 列出所有加载的 JS 脚本，搜索代码，获取源码
-- **断点调试**: 设置/移除断点，支持条件断点，支持在压缩代码中精确定位
-- **函数追踪**: Hook 任意函数（包括模块内部函数），监控调用和返回值
-- **执行控制**: 暂停/恢复执行，单步调试（step over/into/out）
-- **运行时检查**: 在断点处求值表达式，检查作用域变量
-- **网络分析**: 查看请求发起的调用栈，设置 XHR 断点，WebSocket 消息分析
-- **事件监控**: 监控 DOM 事件，检查存储数据
+## Features
 
-## 系统要求
+- **Anti-detection browser**: Based on Patchright (Playwright anti-detection fork), 60+ stealth launch arguments, bypasses mainstream anti-bot systems
+- **Script analysis**: List all loaded JS scripts, search code, get/save source code
+- **Breakpoint debugging**: Set/remove breakpoints, conditional breakpoints, precise positioning in minified code
+- **Function tracing**: Trace any function (including module-internal functions) via logpoints
+- **Execution control**: Pause/resume execution, step debugging (over/into/out) with source context
+- **Runtime inspection**: Evaluate expressions at breakpoints, inspect scope variables
+- **Network analysis**: View request initiator call stacks, set XHR breakpoints, WebSocket message analysis
+- **Script injection**: Inject scripts that run before page load for interception and instrumentation
 
-- [Node.js](https://nodejs.org/) v20.19 或更新版本
-- [Chrome](https://www.google.com/chrome/) 稳定版
-- Git
+## Requirements
 
-## 本地安装
+- [Node.js](https://nodejs.org/) v20.19 or later
+- [Chrome](https://www.google.com/chrome/) stable
 
-```bash
-# 克隆仓库
-git clone https://github.com/nicecaesar/js-reverse-mcp.git
-cd js-reverse-mcp
+## Quick Start (npx)
 
-# 安装依赖
-npm install
-
-# 构建项目
-npm run build
-```
-
-## MCP 客户端配置
-
-在你的 MCP 客户端配置文件中添加：
+No installation required. Add to your MCP client configuration:
 
 ```json
 {
   "mcpServers": {
     "js-reverse": {
-      "command": "node",
-      "args": ["/你的路径/js-reverse-mcp/build/src/index.js"]
+      "command": "npx",
+      "args": ["js-reverse-mcp"]
     }
   }
 }
@@ -53,202 +40,187 @@ npm run build
 ### Claude Code
 
 ```bash
-claude mcp add js-reverse node /你的路径/js-reverse-mcp/build/src/index.js
+claude mcp add js-reverse npx js-reverse-mcp
+```
+
+### Codex
+
+```bash
+codex mcp add js-reverse -- npx js-reverse-mcp
 ```
 
 ### Cursor
 
-进入 `Cursor Settings` -> `MCP` -> `New MCP Server`，使用上面的配置。
+Go to `Cursor Settings` -> `MCP` -> `New MCP Server`, and use the configuration above.
 
 ### VS Code Copilot
 
 ```bash
-code --add-mcp '{"name":"js-reverse","command":"node","args":["/你的路径/js-reverse-mcp/build/src/index.js"]}'
+code --add-mcp '{"name":"js-reverse","command":"npx","args":["js-reverse-mcp"]}'
 ```
 
-## 反检测机制
+## Local Installation (Alternative)
 
-js-reverse-mcp 内置了多层反检测措施，确保在有风控检测的站点上正常工作：
-
-### 反检测架构
-
-| 层级 | 说明 |
-|------|------|
-| Patchright 引擎 | C++ 层反检测 patch，移除 `navigator.webdriver`、避免 `Runtime.enable` 等泄露 |
-| 60+ 隐身启动参数 | 移除自动化特征、绕过无头检测、GPU/网络/行为特征伪装 |
-| 有害参数移除 | 排除 `--enable-automation` 等 5 个 Playwright 默认参数 |
-| CDP 静默导航 | 导航工具执行时不激活 CDP 域，仅通过 Playwright 级监听器捕获请求，避免被反爬脚本检测到调试协议活动 |
-| Google Referer 伪装 | 所有导航自动带 `referer: https://www.google.com/` |
-| 持久化登录态 | 默认使用持久化 user-data-dir，登录状态跨会话保留 |
-
-## 工具列表
-
-### 脚本分析
-
-| 工具                | 描述                                                 |
-| ------------------- | ---------------------------------------------------- |
-| `list_scripts`      | 列出页面中所有加载的 JavaScript 脚本                 |
-| `get_script_source` | 获取脚本源码，支持行范围或字符偏移（适用于压缩文件） |
-| `search_in_sources` | 在所有脚本中搜索字符串或正则表达式                   |
-
-### 断点管理
-
-| 工具                     | 描述                                           |
-| ------------------------ | ---------------------------------------------- |
-| `set_breakpoint_on_text` | 通过搜索代码文本自动设置断点（适用于压缩代码） |
-| `remove_breakpoint`      | 移除断点                                       |
-| `list_breakpoints`       | 列出所有活动断点                               |
-
-### 调试控制
-
-| 工具                    | 描述                             |
-| ----------------------- | -------------------------------- |
-| `get_paused_info`       | 获取暂停状态、调用栈和作用域变量 |
-| `resume`                | 恢复执行                         |
-| `pause`                 | 暂停执行                         |
-| `step_over`             | 单步跳过                         |
-| `step_into`             | 单步进入                         |
-| `step_out`              | 单步跳出                         |
-
-### 函数 Hook
-
-| 工具              | 描述                                                   |
-| ----------------- | ------------------------------------------------------ |
-| `hook_function`   | Hook 全局函数或对象方法，记录调用和返回值              |
-| `unhook_function` | 移除函数 Hook                                          |
-| `list_hooks`      | 列出所有活动的 Hook                                    |
-| `trace_function`  | 追踪任意函数调用（包括模块内部函数），使用条件断点实现 |
-
-### 网络调试
-
-| 工具                            | 描述                             |
-| ------------------------------- | -------------------------------- |
-| `list_network_requests`         | 列出网络请求                     |
-| `get_network_request`           | 获取请求详情和响应内容           |
-| `get_request_initiator`         | 获取网络请求的 JavaScript 调用栈 |
-| `break_on_xhr`                  | 设置 XHR/Fetch 断点              |
-| `remove_xhr_breakpoint`         | 移除 XHR 断点                    |
-| `list_websocket_connections`    | 列出 WebSocket 连接              |
-| `get_websocket_messages`        | 获取 WebSocket 消息              |
-| `analyze_websocket_messages`    | 分析 WebSocket 消息模式          |
-
-### 检查工具
-
-| 工具                    | 描述                                       |
-| ----------------------- | ------------------------------------------ |
-| `evaluate_script`       | 在页面中执行 JavaScript                    |
-| `inspect_object`        | 深度检查 JavaScript 对象结构               |
-| `get_storage`           | 获取 cookies、localStorage、sessionStorage |
-| `monitor_events`        | 监控元素或 window 上的 DOM 事件            |
-| `stop_monitor`          | 停止事件监控                               |
-| `list_console_messages` | 获取控制台消息                             |
-| `get_console_message`   | 获取控制台消息详情                         |
-
-### 页面管理
-
-| 工具              | 描述                       |
-| ----------------- | -------------------------- |
-| `list_pages`      | 列出浏览器中打开的页面     |
-| `select_page`     | 选择一个页面作为调试上下文 |
-| `new_page`        | 创建新页面并导航到 URL     |
-| `navigate_page`   | 导航、后退、前进或刷新页面 |
-| `list_frames`     | 列出页面中的所有 frame     |
-| `select_frame`    | 选择 frame 作为执行上下文  |
-| `take_screenshot`  | 截取页面截图              |
-
-## 使用示例
-
-### JS 逆向基本流程
-
-1. **打开目标页面**
-
-```
-打开 https://example.com 并列出所有加载的 JS 脚本
+```bash
+git clone https://github.com/nicecaesar/js-reverse-mcp.git
+cd js-reverse-mcp
+npm install
+npm run build
 ```
 
-2. **查找目标函数**
-
-```
-在所有脚本中搜索包含 "encrypt" 的代码
-```
-
-3. **设置断点**
-
-```
-在加密函数入口处设置断点
-```
-
-4. **触发并分析**
-
-```
-在页面上触发操作，断点命中后检查参数、调用栈和作用域变量
-```
-
-### Hook 加密函数
-
-```
-Hook fetch 函数，记录所有 API 调用的参数和返回值
-```
-
-### 追踪模块内部函数
-
-```
-使用 trace_function 追踪 webpack 打包的内部函数 "encryptData"，
-无需设置断点即可查看每次调用的参数
-```
-
-### WebSocket 协议分析
-
-```
-列出 WebSocket 连接，分析消息模式，查看特定类型的消息内容
-```
-
-## 配置选项
-
-| 选项                   | 描述                                   | 默认值  |
-| ---------------------- | -------------------------------------- | ------- |
-| `--browserUrl, -u`     | 连接到运行中的 Chrome 实例             | -       |
-| `--wsEndpoint, -w`     | WebSocket 端点连接                     | -       |
-| `--headless`           | 无头模式运行                           | false   |
-| `--executablePath, -e` | 自定义 Chrome 路径                     | -       |
-| `--isolated`           | 使用临时用户数据目录（每次全新）       | false   |
-| `--channel`            | Chrome 通道: stable, canary, beta, dev | stable  |
-| `--viewport`           | 初始视口大小，如 `1280x720`            | 真实尺寸 |
-| `--hideCanvas`         | 启用 Canvas 指纹加噪                  | false   |
-| `--blockWebrtc`        | 阻止 WebRTC 泄露真实 IP               | false   |
-| `--disableWebgl`       | 禁用 WebGL 防止 GPU 指纹              | false   |
-| `--noStealth`          | 禁用隐身启动参数（调试用）             | false   |
-| `--proxyServer`        | 代理服务器配置                         | -       |
-| `--logFile`            | 调试日志文件路径                       | -       |
-
-### 示例配置
-
-**基础使用（推荐）：**
+Then use local path in your MCP configuration:
 
 ```json
 {
   "mcpServers": {
     "js-reverse": {
       "command": "node",
-      "args": [
-        "/你的路径/js-reverse-mcp/build/src/index.js",
-        "--headless=false"
-      ]
+      "args": ["/path/to/js-reverse-mcp/build/src/index.js"]
     }
   }
 }
 ```
 
-**增强反检测（Canvas 加噪 + WebRTC 阻止）：**
+## Anti-Detection
+
+js-reverse-mcp includes multi-layered anti-detection measures to work on sites with bot detection:
+
+### Anti-Detection Architecture
+
+| Layer | Description |
+|-------|-------------|
+| Patchright Engine | C++ level anti-detection patches, removes `navigator.webdriver`, avoids `Runtime.enable` leaks |
+| 60+ Stealth Args | Removes automation signatures, bypasses headless detection, GPU/network/behavior fingerprint spoofing |
+| Harmful Args Removal | Excludes `--enable-automation` and 4 other default Playwright arguments |
+| Silent CDP Navigation | Navigation tools don't activate CDP domains, captures requests only through Playwright-level listeners, preventing anti-bot scripts from detecting debugging protocol activity |
+| Google Referer Spoofing | All navigations automatically include `referer: https://www.google.com/` |
+| Persistent Login State | Uses persistent user-data-dir by default, login state preserved across sessions |
+
+## Tools (23)
+
+### Page & Navigation
+
+| Tool              | Description                                                    |
+| ----------------- | -------------------------------------------------------------- |
+| `select_page`     | List open pages, or select one by index as debugging context   |
+| `new_page`        | Create a new page and navigate to URL                          |
+| `navigate_page`   | Navigate, go back, forward, or reload                          |
+| `select_frame`    | List all frames (iframes), or select one as execution context  |
+| `take_screenshot` | Take a page screenshot                                         |
+
+### Script Analysis
+
+| Tool                | Description                                                    |
+| ------------------- | -------------------------------------------------------------- |
+| `list_scripts`      | List all JavaScript scripts loaded in the page                 |
+| `get_script_source` | Get script source snippet by line range or character offset    |
+| `save_script_source`| Save full script source to a local file (for large/minified files) |
+| `search_in_sources` | Search for strings or regex patterns across all scripts        |
+
+### Breakpoint & Execution Control
+
+| Tool                     | Description                                                |
+| ------------------------ | ---------------------------------------------------------- |
+| `set_breakpoint_on_text` | Set breakpoint by searching code text (works with minified code) |
+| `break_on_xhr`           | Set XHR/Fetch breakpoint by URL pattern                    |
+| `remove_breakpoint`      | Remove breakpoint(s) by ID, URL, or all; auto-resumes     |
+| `list_breakpoints`       | List all active breakpoints                                |
+| `get_paused_info`        | Get paused state, call stack and scope variables           |
+| `pause_or_resume`        | Toggle pause/resume execution                              |
+| `step`                   | Step over, into, or out with source context in response    |
+
+### Function Tracing & Injection
+
+| Tool                | Description                                                           |
+| ------------------- | --------------------------------------------------------------------- |
+| `trace_function`    | Trace any function call (including bundled internals) via logpoints   |
+| `inject_before_load`| Inject or remove a script that runs before page load                  |
+
+### Network & WebSocket
+
+| Tool                     | Description                                    |
+| ------------------------ | ---------------------------------------------- |
+| `list_network_requests`  | List network requests, or get one by reqid     |
+| `get_request_initiator`  | Get JavaScript call stack for a network request|
+| `get_websocket_messages` | List WebSocket connections, analyze messages, or get message details |
+
+### Inspection
+
+| Tool                    | Description                                    |
+| ----------------------- | ---------------------------------------------- |
+| `evaluate_script`       | Execute JavaScript in the page (supports paused context and main world) |
+| `list_console_messages` | List console messages, or get one by msgid     |
+
+## Usage Examples
+
+### Basic JS Reverse Engineering Workflow
+
+1. **Open the target page**
+
+```
+Open https://example.com and list all loaded JS scripts
+```
+
+2. **Find target functions**
+
+```
+Search all scripts for code containing "encrypt"
+```
+
+3. **Set breakpoints**
+
+```
+Set a breakpoint at the entry of the encryption function
+```
+
+4. **Trigger and analyze**
+
+```
+Trigger an action on the page, then inspect arguments, call stack and scope variables when the breakpoint hits
+```
+
+### Trace Module-Internal Functions
+
+```
+Use trace_function to trace the webpack-bundled internal function "encryptData",
+view arguments of each call without setting breakpoints
+```
+
+### WebSocket Protocol Analysis
+
+```
+List WebSocket connections, analyze message patterns, view messages of specific types
+```
+
+## Configuration Options
+
+| Option                 | Description                                | Default    |
+| ---------------------- | ------------------------------------------ | ---------- |
+| `--browserUrl, -u`     | Connect to a running Chrome instance       | -          |
+| `--wsEndpoint, -w`     | WebSocket endpoint connection              | -          |
+| `--headless`           | Run in headless mode                       | false      |
+| `--executablePath, -e` | Custom Chrome executable path              | -          |
+| `--isolated`           | Use temporary user data directory (fresh each time) | false |
+| `--channel`            | Chrome channel: stable, canary, beta, dev  | stable     |
+| `--viewport`           | Initial viewport size, e.g. `1280x720`    | real size  |
+| `--hideCanvas`         | Enable Canvas fingerprint noise            | false      |
+| `--blockWebrtc`        | Block WebRTC to prevent real IP leaks      | false      |
+| `--disableWebgl`       | Disable WebGL to prevent GPU fingerprinting | false     |
+| `--noStealth`          | Disable stealth launch arguments (for debugging) | false |
+| `--proxyServer`        | Proxy server configuration                 | -          |
+| `--logFile`            | Debug log file path                        | -          |
+
+### Example Configurations
+
+**Enhanced anti-detection (Canvas noise + WebRTC blocking):**
 
 ```json
 {
   "mcpServers": {
     "js-reverse": {
-      "command": "node",
+      "command": "npx",
       "args": [
-        "/你的路径/js-reverse-mcp/build/src/index.js",
-        "--headless=false",
+        "js-reverse-mcp",
         "--hideCanvas",
         "--blockWebrtc"
       ]
@@ -257,16 +229,15 @@ Hook fetch 函数，记录所有 API 调用的参数和返回值
 }
 ```
 
-**临时隔离模式（不保留登录态，每次全新 profile）：**
+**Isolated mode (no persistent login, fresh profile each time):**
 
 ```json
 {
   "mcpServers": {
     "js-reverse": {
-      "command": "node",
+      "command": "npx",
       "args": [
-        "/你的路径/js-reverse-mcp/build/src/index.js",
-        "--headless=false",
+        "js-reverse-mcp",
         "--isolated"
       ]
     }
@@ -274,9 +245,9 @@ Hook fetch 函数，记录所有 API 调用的参数和返回值
 }
 ```
 
-### 连接到已运行的 Chrome
+### Connect to a Running Chrome Instance
 
-1. 启动 Chrome（需要关闭所有 Chrome 窗口后重新启动）：
+1. Launch Chrome (close all Chrome windows first, then restart):
 
 **macOS**
 
@@ -290,15 +261,15 @@ Hook fetch 函数，记录所有 API 调用的参数和返回值
 "C:\Program Files\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9222 --user-data-dir="%TEMP%\chrome-debug"
 ```
 
-2. 配置 MCP 连接：
+2. Configure MCP connection:
 
 ```json
 {
   "mcpServers": {
     "js-reverse": {
-      "command": "node",
+      "command": "npx",
       "args": [
-        "/你的路径/js-reverse-mcp/build/src/index.js",
+        "js-reverse-mcp",
         "--browser-url=http://127.0.0.1:9222"
       ]
     }
@@ -306,20 +277,20 @@ Hook fetch 函数，记录所有 API 调用的参数和返回值
 }
 ```
 
-## 故障排除
+## Troubleshooting
 
-### 被反爬系统拦截
+### Blocked by Anti-Bot Systems
 
-如果访问某些站点被拦截（如知乎返回 40362 错误）：
+If you are blocked when visiting certain sites (e.g. Zhihu returning error 40362):
 
-1. **清除污染的 profile**：删除 `~/.cache/chrome-devtools-mcp/chrome-profile` 目录
-2. **使用隔离模式**：添加 `--isolated` 参数启动
-3. **启用 Canvas 加噪**：添加 `--hideCanvas` 参数
+1. **Clear the contaminated profile**: Delete the `~/.cache/chrome-devtools-mcp/chrome-profile` directory
+2. **Use isolated mode**: Add the `--isolated` flag
+3. **Enable Canvas noise**: Add the `--hideCanvas` flag
 
-## 安全提示
+## Security Notice
 
-此工具会将浏览器内容暴露给 MCP 客户端，允许检查、调试和修改浏览器中的任何数据。请勿在包含敏感信息的页面上使用。
+This tool exposes browser content to MCP clients, allowing inspection, debugging, and modification of any data in the browser. Do not use it on pages containing sensitive information.
 
-## 许可证
+## License
 
 Apache-2.0

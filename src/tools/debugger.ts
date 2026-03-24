@@ -14,10 +14,68 @@
  * - Request initiator (call stack) analysis
  */
 
+import type {CallFrame, DebuggerContext} from '../DebuggerContext.js';
 import {zod} from '../third_party/index.js';
 
 import {ToolCategory} from './categories.js';
+import type {Response} from './ToolDefinition.js';
 import {defineTool} from './ToolDefinition.js';
+
+/**
+ * After a step command, append a concise summary of where execution stopped.
+ * Shows: function name, location, arguments, and a small code snippet.
+ */
+async function appendStepSummary(
+  response: Response,
+  debugger_: DebuggerContext,
+  action: string,
+  frame: CallFrame,
+): Promise<void> {
+  const line = frame.location.lineNumber + 1; // CDP is 0-based
+  const col = frame.location.columnNumber + 1;
+  const funcName = frame.functionName || '<anonymous>';
+  const url = frame.url || `script:${frame.location.scriptId}`;
+  const shortUrl = url.split('/').pop() || url;
+
+  response.appendResponseLine(
+    `${action} → ${shortUrl}:${line}:${col}, function ${funcName}`,
+  );
+
+  // Show function arguments via evaluateOnCallFrame
+  try {
+    const argsResult = await debugger_.evaluateOnCallFrame(
+      frame.callFrameId,
+      `(() => { try { return JSON.stringify(Array.from(arguments)).slice(0, 500); } catch(e) { return String(arguments.length) + ' args'; } })()`,
+      {returnByValue: true},
+    );
+    if (argsResult.result.value && !argsResult.exceptionDetails) {
+      response.appendResponseLine(`  args: ${argsResult.result.value}`);
+    }
+  } catch {
+    // arguments not available (e.g. arrow function or global scope)
+  }
+
+  // Show a small code snippet around the exact column position
+  try {
+    const source = await debugger_.getScriptSource(frame.location.scriptId);
+    const lines = source.split('\n');
+    const lineContent = lines[frame.location.lineNumber];
+    if (lineContent) {
+      const snippetLen = 200;
+      const half = Math.floor(snippetLen / 2);
+      const c = frame.location.columnNumber;
+      const s = Math.max(0, c - half);
+      const e = Math.min(lineContent.length, s + snippetLen);
+      const prefix = s > 0 ? '...' : '';
+      const suffix = e < lineContent.length ? '...' : '';
+      response.appendResponseLine(
+        `  > ${prefix}${lineContent.substring(s, e)}${suffix}`,
+      );
+    }
+  } catch {
+    // Source unavailable
+  }
+}
 
 /**
  * List all loaded JavaScript scripts in the current page.
@@ -509,12 +567,14 @@ export const searchInSources = defineTool({
 });
 
 /**
- * Remove a breakpoint.
+ * Remove breakpoint(s). Supports removing a single code breakpoint by ID,
+ * a single XHR breakpoint by URL, or all breakpoints at once.
+ * Automatically resumes execution if currently paused.
  */
 export const removeBreakpoint = defineTool({
   name: 'remove_breakpoint',
   description:
-    'Removes a breakpoint by its ID. Use list_breakpoints to see active breakpoints.',
+    'Removes breakpoints and automatically resumes execution if paused. Pass breakpointId to remove a code breakpoint, url to remove an XHR breakpoint, or neither to remove ALL breakpoints (code + XHR).',
   annotations: {
     title: 'Remove Breakpoint',
     category: ToolCategory.REVERSE_ENGINEERING,
@@ -523,9 +583,14 @@ export const removeBreakpoint = defineTool({
   schema: {
     breakpointId: zod
       .string()
+      .optional()
       .describe(
         'The breakpoint ID to remove (from list_breakpoints or set_breakpoint_on_text).',
       ),
+    url: zod
+      .string()
+      .optional()
+      .describe('The XHR breakpoint URL pattern to remove.'),
   },
   handler: async (request, response, context) => {
     const debugger_ = context.debuggerContext;
@@ -537,53 +602,48 @@ export const removeBreakpoint = defineTool({
       return;
     }
 
-    const {breakpointId} = request.params;
+    const {breakpointId, url} = request.params;
 
     try {
-      await debugger_.removeBreakpoint(breakpointId);
-      response.appendResponseLine(
-        `Breakpoint ${breakpointId} removed successfully.`,
-      );
+      if (breakpointId) {
+        // Remove a single code breakpoint by ID
+        await debugger_.removeBreakpoint(breakpointId);
+        response.appendResponseLine(
+          `Breakpoint ${breakpointId} removed.`,
+        );
+      } else if (url) {
+        // Remove a single XHR breakpoint by URL
+        await debugger_.removeXHRBreakpoint(url);
+        response.appendResponseLine(
+          `XHR breakpoint for "${url}" removed.`,
+        );
+      } else {
+        // Remove all breakpoints (code + XHR)
+        const codeCount = debugger_.getBreakpoints().length;
+        const xhrCount = debugger_.getXHRBreakpoints().length;
+        if (codeCount === 0 && xhrCount === 0) {
+          response.appendResponseLine('No active breakpoints to remove.');
+          return;
+        }
+        await debugger_.removeAllBreakpoints();
+        const parts: string[] = [];
+        if (codeCount > 0) parts.push(`${codeCount} code`);
+        if (xhrCount > 0) parts.push(`${xhrCount} XHR`);
+        response.appendResponseLine(
+          `Removed ${parts.join(' + ')} breakpoint(s).`,
+        );
+      }
+
+      // Auto-resume if currently paused
+      if (debugger_.isPaused()) {
+        await debugger_.resume();
+        response.appendResponseLine('▶️ Execution resumed.');
+      }
     } catch (error) {
       response.appendResponseLine(
-        `Error removing breakpoint: ${error instanceof Error ? error.message : String(error)}`,
+        `Error: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
-  },
-});
-
-/**
- * Remove all breakpoints.
- */
-export const removeAllBreakpoints = defineTool({
-  name: 'remove_all_breakpoints',
-  description:
-    'Removes all active breakpoints. Use this to clean up debugging state.',
-  annotations: {
-    title: 'Remove All Breakpoints',
-    category: ToolCategory.REVERSE_ENGINEERING,
-    readOnlyHint: false,
-  },
-  schema: {},
-  handler: async (request, response, context) => {
-    const debugger_ = context.debuggerContext;
-
-    if (!debugger_.isEnabled()) {
-      response.appendResponseLine(
-        'Debugger is not enabled. Please select a page first.',
-      );
-      return;
-    }
-
-    const breakpoints = debugger_.getBreakpoints();
-    if (breakpoints.length === 0) {
-      response.appendResponseLine('No active breakpoints to remove.');
-      return;
-    }
-
-    const count = breakpoints.length;
-    await debugger_.removeAllBreakpoints();
-    response.appendResponseLine(`Removed ${count} breakpoint(s).`);
   },
 });
 
@@ -751,7 +811,21 @@ export const getPausedInfo = defineTool({
       .int()
       .optional()
       .default(2)
-      .describe('Maximum scope depth to traverse (default: 2).'),
+      .describe(
+        'Maximum scope depth to traverse (default: 2). ' +
+          '1 = local scope only (function args & local vars), ' +
+          '2 = local + closure scopes, ' +
+          '3+ = all non-global scopes.',
+      ),
+    frameIndex: zod
+      .number()
+      .int()
+      .optional()
+      .default(0)
+      .describe(
+        'Which call frame to inspect scope variables for (0 = top frame). ' +
+          'Use the call stack indices to pick a frame.',
+      ),
   },
   handler: async (request, response, context) => {
     const debugger_ = context.debuggerContext;
@@ -796,52 +870,83 @@ export const getPausedInfo = defineTool({
       response.appendResponseLine(
         `  ${i}. ${frame.functionName} @ ${location}`,
       );
-      response.appendResponseLine(`     CallFrameId: ${frame.callFrameId}`);
     }
 
     // Include scope variables if requested
     if (request.params.includeScopes && pausedState.callFrames.length > 0) {
-      response.appendResponseLine('\n🔍 Scope Variables (top frame):');
+      const frameIndex = request.params.frameIndex;
+      if (frameIndex < 0 || frameIndex >= pausedState.callFrames.length) {
+        response.appendResponseLine(
+          `\n⚠️ frameIndex ${frameIndex} is out of range (0-${pausedState.callFrames.length - 1}).`,
+        );
+      } else {
+        const selectedFrame = pausedState.callFrames[frameIndex];
+        response.appendResponseLine(
+          `\n🔍 Scope Variables (frame ${frameIndex}: ${selectedFrame.functionName || '<anonymous>'}):`,
+        );
 
-      const topFrame = pausedState.callFrames[0];
+        const maxDepth = request.params.maxScopeDepth;
+        // Scope priority: local(1) > closure(2) > block/catch/with/etc(3+)
+        // Always skip global scope
+        const scopePriority: Record<string, number> = {
+          local: 1,
+          closure: 2,
+        };
+        let scopeCount = 0;
 
-      for (const scope of topFrame.scopeChain) {
-        // Only show local and closure scopes, skip global
-        if (scope.type === 'global') {
-          continue;
+        for (const scope of selectedFrame.scopeChain) {
+          if (scope.type === 'global') {
+            continue;
+          }
+
+          const priority = scopePriority[scope.type] ?? 3;
+          if (priority > maxDepth) {
+            continue;
+          }
+          scopeCount++;
+
+          const scopeName = scope.name || scope.type;
+          response.appendResponseLine(`\n  [${scopeName}]:`);
+
+          if (scope.object.objectId) {
+            try {
+              const variables = await debugger_.getScopeVariables(
+                scope.object.objectId,
+              );
+
+              if (variables.length === 0) {
+                response.appendResponseLine('    (empty)');
+              } else {
+                for (const variable of variables.slice(0, 20)) {
+                  let valueStr =
+                    typeof variable.value === 'string'
+                      ? `"${variable.value}"`
+                      : JSON.stringify(variable.value);
+                  if (valueStr && valueStr.length > 200) {
+                    valueStr = valueStr.slice(0, 200) + '...(truncated)';
+                  }
+                  response.appendResponseLine(
+                    `    ${variable.name}: ${valueStr}`,
+                  );
+                }
+                if (variables.length > 20) {
+                  response.appendResponseLine(
+                    `    ... and ${variables.length - 20} more`,
+                  );
+                }
+              }
+            } catch {
+              response.appendResponseLine(
+                '    (unable to retrieve variables)',
+              );
+            }
+          }
         }
 
-        const scopeName = scope.name || scope.type;
-        response.appendResponseLine(`\n  [${scopeName}]:`);
-
-        if (scope.object.objectId) {
-          try {
-            const variables = await debugger_.getScopeVariables(
-              scope.object.objectId,
-            );
-
-            if (variables.length === 0) {
-              response.appendResponseLine('    (empty)');
-            } else {
-              for (const variable of variables.slice(0, 20)) {
-                // Limit to 20 variables
-                const valueStr =
-                  typeof variable.value === 'string'
-                    ? `"${variable.value}"`
-                    : JSON.stringify(variable.value);
-                response.appendResponseLine(
-                  `    ${variable.name}: ${valueStr}`,
-                );
-              }
-              if (variables.length > 20) {
-                response.appendResponseLine(
-                  `    ... and ${variables.length - 20} more`,
-                );
-              }
-            }
-          } catch {
-            response.appendResponseLine('    (unable to retrieve variables)');
-          }
+        if (scopeCount === 0) {
+          response.appendResponseLine(
+            '    (no matching scopes — try increasing maxScopeDepth)',
+          );
         }
       }
     }
@@ -855,12 +960,12 @@ export const getPausedInfo = defineTool({
 /**
  * Resume execution after a breakpoint.
  */
-export const resume = defineTool({
-  name: 'resume',
+export const pauseOrResume = defineTool({
+  name: 'pause_or_resume',
   description:
-    'Resumes JavaScript execution after being paused at a breakpoint. Execution continues until the next breakpoint or completion.',
+    'Toggles JavaScript execution. If paused, resumes execution. If running, pauses execution.',
   annotations: {
-    title: 'Resume Execution',
+    title: 'Pause / Resume',
     category: ToolCategory.REVERSE_ENGINEERING,
     readOnlyHint: false,
   },
@@ -875,76 +980,43 @@ export const resume = defineTool({
       return;
     }
 
-    if (!debugger_.isPaused()) {
-      response.appendResponseLine('Execution is not paused.');
-      return;
-    }
-
     try {
-      await debugger_.resume();
-      response.appendResponseLine('▶️ Execution resumed.');
+      if (debugger_.isPaused()) {
+        await debugger_.resume();
+        response.appendResponseLine('▶️ Execution resumed.');
+      } else {
+        await debugger_.pause();
+        response.appendResponseLine(
+          '⏸️ Pause requested. Waiting for execution to pause...',
+        );
+      }
     } catch (error) {
       response.appendResponseLine(
-        `Error resuming: ${error instanceof Error ? error.message : String(error)}`,
+        `Error: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
   },
 });
 
 /**
- * Pause execution.
+ * Step execution: over, into, or out.
  */
-export const pause = defineTool({
-  name: 'pause',
+export const step = defineTool({
+  name: 'step',
   description:
-    'Pauses JavaScript execution at the current point. Use this to interrupt running code.',
+    'Steps JavaScript execution. Use direction "over" to skip function calls, "into" to enter function bodies, "out" to exit the current function. Returns the new location with source context.',
   annotations: {
-    title: 'Pause Execution',
+    title: 'Step',
     category: ToolCategory.REVERSE_ENGINEERING,
     readOnlyHint: false,
   },
-  schema: {},
-  handler: async (request, response, context) => {
-    const debugger_ = context.debuggerContext;
-
-    if (!debugger_.isEnabled()) {
-      response.appendResponseLine(
-        'Debugger is not enabled. Please select a page first.',
-      );
-      return;
-    }
-
-    if (debugger_.isPaused()) {
-      response.appendResponseLine('Execution is already paused.');
-      return;
-    }
-
-    try {
-      await debugger_.pause();
-      response.appendResponseLine(
-        '⏸️ Pause requested. Waiting for execution to pause...',
-      );
-    } catch (error) {
-      response.appendResponseLine(
-        `Error pausing: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
+  schema: {
+    direction: zod
+      .enum(['over', 'into', 'out'])
+      .describe(
+        'Step direction: "over" (next statement), "into" (enter function), "out" (exit function).',
+      ),
   },
-});
-
-/**
- * Step over to the next statement.
- */
-export const stepOver = defineTool({
-  name: 'step_over',
-  description:
-    'Steps over to the next statement, treating function calls as a single step. Use this to move through code without entering function bodies.',
-  annotations: {
-    title: 'Step Over',
-    category: ToolCategory.REVERSE_ENGINEERING,
-    readOnlyHint: false,
-  },
-  schema: {},
   handler: async (request, response, context) => {
     const debugger_ = context.debuggerContext;
 
@@ -960,96 +1032,24 @@ export const stepOver = defineTool({
       return;
     }
 
-    try {
-      await debugger_.stepOver();
-      response.appendResponseLine(
-        '⏭️ Stepped over. Use get_paused_info to see current state.',
-      );
-    } catch (error) {
-      response.appendResponseLine(
-        `Error stepping over: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
-  },
-});
-
-/**
- * Step into the next function call.
- */
-export const stepInto = defineTool({
-  name: 'step_into',
-  description:
-    'Steps into the next function call. Use this to enter and debug function bodies.',
-  annotations: {
-    title: 'Step Into',
-    category: ToolCategory.REVERSE_ENGINEERING,
-    readOnlyHint: false,
-  },
-  schema: {},
-  handler: async (request, response, context) => {
-    const debugger_ = context.debuggerContext;
-
-    if (!debugger_.isEnabled()) {
-      response.appendResponseLine(
-        'Debugger is not enabled. Please select a page first.',
-      );
-      return;
-    }
-
-    if (!debugger_.isPaused()) {
-      response.appendResponseLine('Execution is not paused. Cannot step.');
-      return;
-    }
+    const {direction} = request.params;
+    const labels = {
+      over: '⏭️ Stepped over',
+      into: '⬇️ Stepped into',
+      out: '⬆️ Stepped out',
+    } as const;
 
     try {
-      await debugger_.stepInto();
-      response.appendResponseLine(
-        '⬇️ Stepped into. Use get_paused_info to see current state.',
-      );
+      const frame =
+        direction === 'over'
+          ? await debugger_.stepOver()
+          : direction === 'into'
+            ? await debugger_.stepInto()
+            : await debugger_.stepOut();
+      await appendStepSummary(response, debugger_, labels[direction], frame);
     } catch (error) {
       response.appendResponseLine(
-        `Error stepping into: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
-  },
-});
-
-/**
- * Step out of the current function.
- */
-export const stepOut = defineTool({
-  name: 'step_out',
-  description:
-    'Steps out of the current function, continuing until the function returns. Use this to quickly exit a function.',
-  annotations: {
-    title: 'Step Out',
-    category: ToolCategory.REVERSE_ENGINEERING,
-    readOnlyHint: false,
-  },
-  schema: {},
-  handler: async (request, response, context) => {
-    const debugger_ = context.debuggerContext;
-
-    if (!debugger_.isEnabled()) {
-      response.appendResponseLine(
-        'Debugger is not enabled. Please select a page first.',
-      );
-      return;
-    }
-
-    if (!debugger_.isPaused()) {
-      response.appendResponseLine('Execution is not paused. Cannot step.');
-      return;
-    }
-
-    try {
-      await debugger_.stepOut();
-      response.appendResponseLine(
-        '⬆️ Stepped out. Use get_paused_info to see current state.',
-      );
-    } catch (error) {
-      response.appendResponseLine(
-        `Error stepping out: ${error instanceof Error ? error.message : String(error)}`,
+        `Error stepping ${direction}: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
   },
@@ -1260,42 +1260,6 @@ export const breakOnXhr = defineTool({
   },
 });
 
-/**
- * Remove XHR/Fetch breakpoint.
- */
-export const removeXhrBreakpoint = defineTool({
-  name: 'remove_xhr_breakpoint',
-  description: 'Removes an XHR/Fetch breakpoint.',
-  annotations: {
-    title: 'Remove XHR Breakpoint',
-    category: ToolCategory.REVERSE_ENGINEERING,
-    readOnlyHint: false,
-  },
-  schema: {
-    url: zod.string().describe('The URL pattern to remove breakpoint for.'),
-  },
-  handler: async (request, response, context) => {
-    const debugger_ = context.debuggerContext;
-
-    if (!debugger_.isEnabled()) {
-      response.appendResponseLine(
-        'Debugger is not enabled. Please select a page first.',
-      );
-      return;
-    }
-
-    const {url} = request.params;
-
-    try {
-      await debugger_.removeXHRBreakpoint(url);
-      response.appendResponseLine(`✅ XHR breakpoint removed for: "${url}"`);
-    } catch (error) {
-      response.appendResponseLine(
-        `Error: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
-  },
-});
 
 /**
  * Trace a function by name - works for module-internal functions.
@@ -1514,13 +1478,12 @@ export const traceFunction = defineTool({
 });
 
 /**
- * Inject a script to run before every page load.
- * Uses CDP Page.addScriptToEvaluateOnNewDocument.
+ * Inject or remove a script that runs before every page load.
  */
-export const injectBeforeLoad = defineTool({
+export const injectScript = defineTool({
   name: 'inject_before_load',
   description:
-    'Injects a JavaScript script that runs before any page script on every page load (including refreshes and navigations). Persists until removed. Uses CDP Page.addScriptToEvaluateOnNewDocument.',
+    'Injects a JavaScript script that runs before any page script on every page load. Pass script to inject, or pass identifier to remove a previously injected script.',
   annotations: {
     title: 'Inject Before Load',
     category: ToolCategory.REVERSE_ENGINEERING,
@@ -1529,70 +1492,15 @@ export const injectBeforeLoad = defineTool({
   schema: {
     script: zod
       .string()
+      .optional()
       .describe(
         'JavaScript code to inject. Runs before any page script. Example: Object.defineProperty(window, "h5sign", { set(v) { debugger; this._h5sign = v; }, get() { return this._h5sign; } })',
       ),
-  },
-  handler: async (request, response, context) => {
-    const debugger_ = context.debuggerContext;
-
-    if (!debugger_.isEnabled()) {
-      response.appendResponseLine(
-        'Debugger is not enabled. Please select a page first.',
-      );
-      return;
-    }
-
-    const client = debugger_.getClient();
-    if (!client) {
-      response.appendResponseLine('Debugger client not available.');
-      return;
-    }
-
-    const {script} = request.params;
-
-    try {
-      await client.send('Page.enable');
-      const result = await client.send(
-        'Page.addScriptToEvaluateOnNewDocument',
-        {source: script},
-      );
-      const identifier = result.identifier;
-      context.trackInjectedScript(identifier, script);
-      response.appendResponseLine(
-        `Script injected. Identifier: ${identifier}`,
-      );
-      response.appendResponseLine(
-        'It will run before any page script on every load.',
-      );
-      response.appendResponseLine(
-        `Use remove_injected_script(identifier: "${identifier}") to remove.`,
-      );
-    } catch (error) {
-      response.appendResponseLine(
-        `Error: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
-  },
-});
-
-/**
- * Remove an injected script.
- */
-export const removeInjectedScript = defineTool({
-  name: 'remove_injected_script',
-  description:
-    'Removes a script previously injected with inject_before_load.',
-  annotations: {
-    title: 'Remove Injected Script',
-    category: ToolCategory.REVERSE_ENGINEERING,
-    readOnlyHint: false,
-  },
-  schema: {
     identifier: zod
       .string()
+      .optional()
       .describe(
-        'The identifier returned by inject_before_load.',
+        'The identifier of a previously injected script to remove.',
       ),
   },
   handler: async (request, response, context) => {
@@ -1611,17 +1519,45 @@ export const removeInjectedScript = defineTool({
       return;
     }
 
-    const {identifier} = request.params;
+    const {script, identifier} = request.params;
+
+    if (!script && !identifier) {
+      response.appendResponseLine(
+        'Either script (to inject) or identifier (to remove) must be provided.',
+      );
+      return;
+    }
 
     try {
       await client.send('Page.enable');
-      await client.send('Page.removeScriptToEvaluateOnNewDocument', {
-        identifier,
-      });
-      context.untrackInjectedScript(identifier);
-      response.appendResponseLine(
-        `Injected script ${identifier} removed.`,
-      );
+
+      if (identifier) {
+        // Remove mode
+        await client.send('Page.removeScriptToEvaluateOnNewDocument', {
+          identifier,
+        });
+        context.untrackInjectedScript(identifier);
+        response.appendResponseLine(
+          `Injected script ${identifier} removed.`,
+        );
+      } else {
+        // Inject mode
+        const result = await client.send(
+          'Page.addScriptToEvaluateOnNewDocument',
+          {source: script!},
+        );
+        const id = result.identifier;
+        context.trackInjectedScript(id, script!);
+        response.appendResponseLine(
+          `Script injected. Identifier: ${id}`,
+        );
+        response.appendResponseLine(
+          'It will run before any page script on every load.',
+        );
+        response.appendResponseLine(
+          `To remove: inject_before_load(identifier: "${id}")`,
+        );
+      }
     } catch (error) {
       response.appendResponseLine(
         `Error: ${error instanceof Error ? error.message : String(error)}`,
